@@ -21,14 +21,4 @@ This mirrors Table 1 of the paper. Values are already set in the corresponding
 | Ensemble params (total)    | ~4.0M                  | ~4.2M                  | ~4.2M                  |
 | Per-model params           | ~1.32M                 | ~1.4M                  | ~1.4M                  |
 
-## Seeds and optimal mini-batch counts
-
-All experiments use seeds **42, 43, 44**. The optimal per-seed number of
-mini-batches `J` (selected by validation AUC via `tune.py`) is set in the
-`NUM_BATCHES` list inside each `run_srpm.py`:
-
-| Dataset     | Seed 42 | Seed 43 | Seed 44 |
-|-------------|---------|---------|---------|
-| BreastMNIST | 32      | 20      | 24      |
-| ACRIMA      | 34      | 32      | 36      |
-| Skin Cancer | see `src/skincancer/run_srpm.py` |  |  |
+ All experiments use seeds **42, 43, 44**.
