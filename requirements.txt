@@ -1,19 +1,8 @@
-# Core deep learning
 torch
 torchvision
-
-# Numerical / ML utilities
 numpy
 scikit-learn
 
-# Datasets and image I/O
+# datasets:
 medmnist
 Pillow
-
-# Note:
-# Experiments were run with Python 3.10 and PyTorch on NVIDIA H100 GPUs.
-# For exact reproducibility, pin the versions you used, e.g.:
-#   torch==2.3.0
-#   torchvision==0.18.0
-# You can capture your exact versions with:
-#   pip freeze | grep -iE "torch|torchvision|numpy|scikit-learn|medmnist|pillow"
