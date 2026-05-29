@@ -391,10 +391,7 @@ class JointAugmentationEnsemble(nn.Module):
 
 
 def compute_class_weights(dataset_raw, labeled_indices):
-    """
-    Compute inverse frequency class weights for handling class imbalance.
-    Returns a tensor of weights suitable for nn.CrossEntropyLoss.
-    """
+
     labels = [int(dataset_raw.labels[idx][0]) for idx in labeled_indices]
     class_counts = np.bincount(labels, minlength=NUM_CLASSES)
     
@@ -409,7 +406,6 @@ def compute_class_weights(dataset_raw, labeled_indices):
 
 
 def prepare_data():
-    """Prepare BreastMNIST data with labeled/unlabeled split."""
     print("\n" + "="*60)
     print("DATA PREPARATION")
     print("="*60)
@@ -581,7 +577,6 @@ def evaluate_joint_ensemble(ensemble: JointAugmentationEnsemble, loader: DataLoa
     all_labels = np.array(all_labels)
     all_ensemble_probs = np.array(all_ensemble_probs)
     
-    # Binary classification
     ensemble_probs_positive = all_ensemble_probs[:, 1]
     results = {
         "ensemble_balanced_acc": balanced_accuracy_score(all_labels, np.array(all_ensemble_preds)),
