@@ -69,11 +69,6 @@ torch.cuda.set_device(device)
 print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
-
-# ============================================================
-# DUAL LOGGER CLASS
-# ============================================================
-
 class DualLogger:
     """Logger that writes to both stdout and a file."""
     def __init__(self):
@@ -99,11 +94,7 @@ class DualLogger:
             self.log_file.close()
             self.log_file = None
 
-
-# ============================================================
 # 0. CONFIGURATION
-# ============================================================
-
 LABELED_FRACTION = 0.02
 BATCH_SIZE_TRAIN = 16
 BATCH_SIZE_EVAL = 32
@@ -111,22 +102,21 @@ NUM_EPOCHS = 30
 EARLY_STOPPING_PATIENCE = 7
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-1
-NUM_CLASSES = 2  # Binary classification: non-glaucoma vs glaucoma
-IMG_SIZE = 64    # RGB images resized to 64x64
+NUM_CLASSES = 2  # binary classification
+IMG_SIZE = 64    # original imgage resized to 64x64
 IN_CHANNELS = 3  # RGB
 
-# Path to the ACRIMA dataset root folder
+# path to the dataset
 DATA_ROOT = os.environ.get("REST_DATA_ROOT", "./data/glaucoma")  # set REST_DATA_ROOT or edit this
 DATA_ROOT = os.path.expanduser(DATA_ROOT)
 
-# Validation split ratio (from training data)
 VAL_SPLIT_RATIO = 0.15  # 15% of train for validation
 
-# Confidence threshold for pseudo-labeling
-CONFIDENCE_THRESHOLD = 0.95
+# confidence threshold for pseudo-labeling
+CONFIDENCE_THRESHOLD = 0.75
 
-# Alpha weight for pseudo-label loss (0-1)
-# Loss = CE(true_labels) + alpha * CE(pseudo_labels)
+# alpha weight for pseudo-label loss (0-1)
+# loss = CE(true_labels) + alpha * CE(pseudo_labels)
 PSEUDO_LABEL_ALPHA = 0.5
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -141,11 +131,7 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-
-# ============================================================
-# 1. RESNET18 ARCHITECTURE (RGB input)
-# ============================================================
-
+# 1. RESNET18 architecture
 class BasicBlock(nn.Module):
     """Basic residual block for ResNet."""
     expansion = 1
@@ -172,7 +158,7 @@ class BasicBlock(nn.Module):
 class ResNet18(nn.Module):
     """
     ResNet-18 architecture for RGB images.
-    Modified channel configuration [22, 44, 88, 176] for ~1.4M params.
+    modified channel configuration [22, 44, 88, 176] (~1.4M params)
     """
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
@@ -237,11 +223,7 @@ class ResNet18(nn.Module):
         x = torch.flatten(x, 1)  # (batch, 176)
         return x
 
-
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR FUNDUS IMAGES
-# ============================================================
-
+# 2. augmentation for fundus images
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
