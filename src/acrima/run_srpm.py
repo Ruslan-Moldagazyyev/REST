@@ -28,7 +28,7 @@ Training Flow:
 - Backward: Gradients flow to ALL models
 - Update: Single optimizer updates all
 
-Author: Rus (SSL Research Project)
+Author: Ruslan Moldagazyyev, Prashant Jamwal, Azamat Mukhamediya  (SSL Research Project)
 Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
 """
 
