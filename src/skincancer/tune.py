@@ -1,41 +1,3 @@
-"""
-Augmentation-Based Joint Ensemble SRPM-ST TUNING for Skin Cancer: Malignant vs. Benign
-========================================================================================
-
-Adapted from BreastMNIST version for Kaggle Skin Cancer dataset.
-
-KEY CHANGES FROM BREASTMNIST:
-1. Data loading: Custom ImageFolder-based loading (Kaggle folder structure)
-2. Input channels: RGB (3 channels) instead of grayscale (1 channel)
-3. Image size: 64x64 (configurable, larger than 28x28 MedMNIST)
-4. Validation split: Created from training data (Kaggle only has train/test)
-5. Normalization: ImageNet-style RGB normalization
-
-Dataset structure expected:
-    data_root/
-    ├── train/
-    │   ├── benign/
-    │   │   └── *.jpg
-    │   └── malignant/
-    │       └── *.jpg
-    └── test/
-        ├── benign/
-        │   └── *.jpg
-        └── malignant/
-            └── *.jpg
-
-Download from: https://www.kaggle.com/datasets/fanconic/skin-cancer-malignant-vs-benign
-
-Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.4M params each for RGB)
-Diversity Source: Different augmentation strategies
-  - Model 1: Pure (no augmentation at all)
-  - Model 2: Intensity (brightness, contrast, saturation, hue)
-  - Model 3: Geometric (rotation, translation, scale, shear, flips)
-
-Author: Rus (SSL Research Project)
-Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
-"""
-
 import os
 import json
 import random
@@ -86,8 +48,6 @@ IN_CHANNELS = 3  # RGB images
 
 PSEUDO_LABEL_ALPHA = 0.5
 
-# Path to the Kaggle dataset root folder
-# Adjust this path to where you extracted the dataset
 DATA_ROOT = os.environ.get("REST_DATA_ROOT", "./data/skin")  # set REST_DATA_ROOT or edit this
 DATA_ROOT = os.path.expanduser(DATA_ROOT)
 
@@ -123,9 +83,6 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 
-# ============================================================
-# 1. RESNET18 ARCHITECTURE (RGB input)
-# ============================================================
 class BasicBlock(nn.Module):
     expansion = 1
     
@@ -218,16 +175,6 @@ class ResNet18(nn.Module):
         return x
 
 
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR DERMOSCOPY/SKIN CANCER IMAGES
-# ============================================================
-# Based on domain-specific research:
-# - PMC10027281: Medical image augmentation techniques
-# - MDPI Sensors 2021: Med-Aug for optimal DA in medical DL
-# - Key finding: Noise-based augmentations work better than color jitter
-#   for medical images because color is diagnostic
-# ============================================================
-
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
@@ -253,30 +200,19 @@ class AddSaltPepperNoise:
 
 
 def get_augmentation_transforms():
-    """
-    Define three distinct augmentation strategies for dermoscopy skin lesion images.
     
-    Key insight from research: For medical images, NOISE-BASED augmentations
-    are more effective than color jitter because color is diagnostic.
-    """
-    
-    # ImageNet-style normalization for RGB
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]
     )
     
-    # Transform 1: MINIMAL (No Augmentation) - clean anchor view
     transform_minimal = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
+
     
-    # =========================================================
-    # Transform 2: NOISE/ARTIFACT Augmentation
-    # Simulates real imaging variations WITHOUT destroying color
-    # =========================================================
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -293,10 +229,6 @@ def get_augmentation_transforms():
         normalize
     ])
     
-    # =========================================================
-    # Transform 3: GEOMETRIC/SPATIAL
-    # Simulates different capture conditions
-    # =========================================================
     transform_geometric = transforms.Compose([
         transforms.Resize((IMG_SIZE + 12, IMG_SIZE + 12)),
         transforms.RandomCrop(IMG_SIZE),
@@ -332,34 +264,19 @@ def get_eval_transform():
     ])
 
 
-# ============================================================
-# 3. CUSTOM DATASET CLASSES FOR SKIN CANCER
-# ============================================================
 
 class SkinCancerDataset(Dataset):
-    """
-    Custom dataset for Skin Cancer images that mimics MedMNIST's interface.
-    Stores all image paths and labels for consistent indexing.
-    """
     
     def __init__(self, root_dir, split='train', transform=None):
-        """
-        Args:
-            root_dir: Path to dataset root (contains train/ and test/ folders)
-            split: 'train' or 'test'
-            transform: Optional transform to apply
-        """
         self.root_dir = Path(root_dir)
         self.split = split
         self.transform = transform
         
         split_dir = self.root_dir / split
         
-        # Collect all image paths and labels
         self.image_paths = []
         self.labels = []
         
-        # Class mapping: benign=0, malignant=1
         class_to_idx = {'benign': 0, 'malignant': 1}
         
         for class_name, class_idx in class_to_idx.items():
@@ -374,16 +291,10 @@ class SkinCancerDataset(Dataset):
         
         self.labels = np.array(self.labels)
         
-        # For compatibility with MedMNIST-style access
-        # We'll load images lazily but provide a similar interface
         self._imgs_cache = None
     
     @property
     def imgs(self):
-        """
-        Lazy-load all images into memory for MedMNIST-style access.
-        This mimics the .imgs attribute of MedMNIST datasets.
-        """
         if self._imgs_cache is None:
             print(f"  Loading {len(self.image_paths)} images into memory...")
             self._imgs_cache = []
@@ -391,7 +302,6 @@ class SkinCancerDataset(Dataset):
                 img = Image.open(path).convert('RGB')
                 img_array = np.array(img)
                 self._imgs_cache.append(img_array)
-            # Keep as list, not numpy array, to handle varying image sizes
         return self._imgs_cache
     
     def __len__(self):
@@ -410,10 +320,7 @@ class SkinCancerDataset(Dataset):
 
 
 class MultiAugmentationDataset(Dataset):
-    """
-    Dataset wrapper that returns multiple augmented views of each image.
-    Works with SkinCancerDataset.
-    """
+
     
     def __init__(self, base_dataset, transforms_dict):
         self.base_dataset = base_dataset
@@ -423,14 +330,11 @@ class MultiAugmentationDataset(Dataset):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
-        # Access raw image array (triggers lazy loading if needed)
         img_array = self.base_dataset.imgs[idx]
         label = self.base_dataset.labels[idx]
-        
-        # Convert numpy array to PIL Image
+
         img_pil = Image.fromarray(img_array)
         
-        # Apply different transforms for each model
         img_minimal = self.transforms["minimal"](img_pil)
         img_color = self.transforms["color"](img_pil)
         img_geometric = self.transforms["geometric"](img_pil)
@@ -439,7 +343,6 @@ class MultiAugmentationDataset(Dataset):
 
 
 class MultiAugmentationSubset(Dataset):
-    """Subset wrapper for MultiAugmentationDataset."""
     
     def __init__(self, multi_aug_dataset, indices):
         self.dataset = multi_aug_dataset
@@ -454,7 +357,6 @@ class MultiAugmentationSubset(Dataset):
 
 
 class PseudoLabelMultiAugDataset(Dataset):
-    """Dataset that applies multiple augmentations with pseudo-labels."""
     
     def __init__(self, base_dataset, indices, pseudo_labels, transforms_dict):
         self.base_dataset = base_dataset
@@ -482,10 +384,6 @@ class PseudoLabelMultiAugDataset(Dataset):
 
 
 class EvalSubset(Dataset):
-    """
-    Evaluation subset that applies eval_transform to images.
-    Used for validation and test loaders.
-    """
     
     def __init__(self, base_dataset, indices, transform):
         self.base_dataset = base_dataset
@@ -506,13 +404,7 @@ class EvalSubset(Dataset):
         return img, label
 
 
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
 class JointAugmentationEnsemble(nn.Module):
-    """
-    Joint Ensemble with SAME architecture but DIFFERENT augmentation views.
-    """
     
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
@@ -596,9 +488,6 @@ class JointAugmentationEnsemble(nn.Module):
         print("="*70)
 
 
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
 
 def compute_class_weights(dataset_raw, labeled_indices):
     """
@@ -621,10 +510,6 @@ def compute_class_weights(dataset_raw, labeled_indices):
 
 
 def prepare_data():
-    """
-    Prepare Skin Cancer data with labeled/unlabeled split.
-    Creates validation set from training data since Kaggle dataset only has train/test.
-    """
     print("\n" + "="*60)
     print("DATA PREPARATION - Skin Cancer: Malignant vs. Benign")
     print("="*60)
@@ -720,9 +605,6 @@ def prepare_data():
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
 def train_joint_ensemble(
     ensemble: JointAugmentationEnsemble,
     train_loader: DataLoader,
@@ -733,10 +615,7 @@ def train_joint_ensemble(
     verbose: bool = False,
     pseudo_label_alpha: float = 1.0
 ) -> Tuple[JointAugmentationEnsemble, float, int]:
-    """
-    Train the joint augmentation ensemble with class-weighted loss.
-    """
-    # CLASS-WEIGHTED LOSS to handle imbalance (per-sample for alpha weighting)
+
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction='none')
     
     optimizer = optim.AdamW(ensemble.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
@@ -812,10 +691,6 @@ def train_joint_ensemble(
 
 
 def evaluate_joint_ensemble(ensemble: JointAugmentationEnsemble, loader: DataLoader) -> Dict:
-    """
-    Evaluate the joint ensemble on standard (non-augmented) data.
-    During evaluation, all models see the SAME image (no augmentation).
-    """
     ensemble.eval()
     
     all_ensemble_preds = []
@@ -926,16 +801,8 @@ def get_ensemble_predictions(
     return predictions, confidences, accepted_indices
 
 
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
-
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
-    """
-    Extract concatenated penultimate features from all 3 models for given indices.
-    Returns (N, 528) numpy array (176 features * 3 models).
-    """
-    ensemble.eval()
+
     
     class SimpleEvalDataset(Dataset):
         def __init__(self, base_dataset, indices, transform):
@@ -967,16 +834,9 @@ def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
 
 
 def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, batch_size):
-    """
-    TypiClust selection: Extract features, run k-means with k=batch_size,
-    select the sample nearest each centroid.
-    
-    Returns: list of lists, each inner list is a mini-batch of selected indices.
-    """
     print(f"    [TypiClust] Extracting features for {len(unlabeled_indices)} unlabeled samples...")
     features = extract_ensemble_features(ensemble, dataset_raw, unlabeled_indices, eval_transform)
     
-    # Normalize features for better clustering
     from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features)
@@ -985,7 +845,6 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     kmeans = KMeans(n_clusters=batch_size, random_state=42, n_init=10)
     cluster_labels = kmeans.fit_predict(features_scaled)
     
-    # For each cluster, find the sample nearest the centroid
     selected_local_indices = []
     for c in range(batch_size):
         cluster_mask = cluster_labels == c
@@ -993,18 +852,15 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
         
         if len(cluster_indices_local) == 0:
             continue
-        
-        # Distance to centroid
+
         cluster_features = features_scaled[cluster_indices_local]
         centroid = kmeans.cluster_centers_[c]
         distances = np.linalg.norm(cluster_features - centroid, axis=1)
         nearest = cluster_indices_local[np.argmin(distances)]
         selected_local_indices.append(nearest)
-    
-    # Convert local indices to global indices
+
     selected_global = [unlabeled_indices[i] for i in selected_local_indices]
     
-    # The remaining indices (not selected)
     selected_set = set(selected_local_indices)
     remaining_local = [i for i in range(len(unlabeled_indices)) if i not in selected_set]
     remaining_global = [unlabeled_indices[i] for i in remaining_local]
@@ -1014,29 +870,12 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     return selected_global, remaining_global
 
 
-# ============================================================
-# 8. JOINT ENSEMBLE SRPM-ST WITH TYPICLUST
-# ============================================================
-
 def run_joint_ensemble_srpm_st(
     data_dict: Dict,
     num_batches: int,
     verbose: bool = False
 ) -> Dict:
-    """
-    Run SRPM-ST with joint augmentation ensemble + TypiClust selection.
-    
-    Algorithm:
-    1. Train joint ensemble on labeled data
-    2. For each iteration:
-       a. Extract features from current ensemble for remaining unlabeled data
-       b. Run TypiClust to select M representative samples
-       c. Get ensemble predictions for selected samples
-       d. Filter by confidence threshold
-       e. Add accepted pseudo-labels to training set
-       f. RETRAIN FROM SCRATCH
-    3. Evaluate final ensemble
-    """
+
     ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=IN_CHANNELS).to(DEVICE)
     
     train_dataset_raw = data_dict["train_dataset_raw"]
@@ -1051,13 +890,11 @@ def run_joint_ensemble_srpm_st(
     
     eval_transform = get_eval_transform()
     
-    # Compute batch_size (M) from num_batches
     batch_size_M = len(unlabeled_indices) // num_batches
     
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
-    
-    # Phase 1: Initial training on labeled data only
+
     if verbose:
         print(f"  Phase 1: Initial training on {len(labeled_indices)} labeled samples...")
     
@@ -1070,8 +907,7 @@ def run_joint_ensemble_srpm_st(
     
     if verbose:
         print(f"    Initial ensemble Val AUC: {initial_val_auc:.4f}")
-    
-    # Phase 2: Sequential TypiClust-based mini-batch pseudo-labeling
+
     pseudo_labels_dict = {}
     remaining_unlabeled = unlabeled_indices.copy()
     
@@ -1081,7 +917,6 @@ def run_joint_ensemble_srpm_st(
                 print(f"  No more unlabeled samples. Stopping at iteration {batch_idx+1}.")
             break
         
-        # Determine how many to select this iteration
         current_M = min(batch_size_M, len(remaining_unlabeled))
         if current_M < 2:
             # Can't do k-means with k < 2
@@ -1093,22 +928,18 @@ def run_joint_ensemble_srpm_st(
             print(f"  Phase 2: TypiClust iteration {batch_idx+1}/{num_batches} "
                   f"(selecting {current_M} from {len(remaining_unlabeled)} remaining)...")
         
-        # TypiClust: select representative samples
         selected_indices, remaining_unlabeled = typiclust_select(
             ensemble, train_dataset_raw, remaining_unlabeled, eval_transform, current_M
         )
         
-        # Get ensemble predictions for selected samples
         preds, confidences, accepted = get_ensemble_predictions(
             ensemble, train_dataset_raw, selected_indices, eval_transform, CONFIDENCE_THRESHOLD
         )
         
-        # Add pseudo-labels for accepted samples
         for i, idx in enumerate(selected_indices):
             if CONFIDENCE_THRESHOLD == 0 or confidences[i] >= CONFIDENCE_THRESHOLD:
                 pseudo_labels_dict[idx] = int(preds[i])
         
-        # Create combined dataset
         labeled_subset = MultiAugmentationSubset(train_multi_aug, labeled_indices)
         
         pseudo_indices = list(pseudo_labels_dict.keys())
@@ -1125,7 +956,6 @@ def run_joint_ensemble_srpm_st(
         
         train_loader = DataLoader(combined_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True)
         
-        # Recompute class weights including pseudo-labels
         all_training_labels = [int(train_dataset_raw.labels[idx][0]) for idx in labeled_indices]
         all_training_labels += pseudo_labels_list
         training_counts = np.bincount(all_training_labels, minlength=NUM_CLASSES)
@@ -1133,7 +963,6 @@ def run_joint_ensemble_srpm_st(
         updated_weights = total / (NUM_CLASSES * training_counts.astype(float))
         updated_class_weights = torch.FloatTensor(updated_weights).to(DEVICE)
         
-        # RETRAIN FROM SCRATCH per SRPM-ST Algorithm 1
         ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=IN_CHANNELS).to(DEVICE)
         
         ensemble, batch_val_auc, _ = train_joint_ensemble(
@@ -1143,11 +972,9 @@ def run_joint_ensemble_srpm_st(
         if verbose:
             print(f"    Val AUC after iteration {batch_idx+1}: {batch_val_auc:.4f}")
     
-    # Final evaluation
     val_metrics = evaluate_joint_ensemble(ensemble, val_loader)
     test_metrics = evaluate_joint_ensemble(ensemble, test_loader)
     
-    # Compute pseudo-label accuracy
     correct = sum(1 for idx, pl in pseudo_labels_dict.items() if pl == true_labels[idx])
     pseudo_accuracy = correct / len(pseudo_labels_dict) if pseudo_labels_dict else 0
     
@@ -1167,12 +994,7 @@ def run_joint_ensemble_srpm_st(
     }
 
 
-# ============================================================
-# 9. MAIN TUNING LOOP
-# ============================================================
-
 def tune_num_batches(data_dict: Dict) -> Dict:
-    """Tune the number of mini-batches for joint augmentation ensemble SRPM-ST."""
     
     print("\n" + "="*70)
     print("TUNING NUMBER OF MINI-BATCHES FOR AUGMENTATION-BASED ENSEMBLE SRPM-ST")
@@ -1205,7 +1027,6 @@ def tune_num_batches(data_dict: Dict) -> Dict:
 
 
 def save_results(all_results: List[Dict]):
-    """Save results to files."""
     import csv
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
