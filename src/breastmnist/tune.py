@@ -1,22 +1,3 @@
-"""
-Augmentation-Based Joint Ensemble SRPM-ST TUNING for BreastMNIST
-=================================================================
-
-FIXES APPLIED:
-1. CLASS-WEIGHTED LOSS: Inverse frequency weighting to handle 1:4 class imbalance
-2. MODEL 1 = PURE (No Augmentation): No random flips or transforms, just resize+normalize
-3. TYPICLUST: Feature-based mini-batch selection using k-means on penultimate layer features
-
-Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.32M params each)
-Diversity Source: Different augmentation strategies
-  - Model 1: Pure (no augmentation at all)
-  - Model 2: Intensity (brightness, contrast, blur - ultrasound relevant)
-  - Model 3: Geometric (rotation, translation, scale, shear, flips)
-
-Author: Rus (SSL Research Project)
-Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
-"""
-
 import os
 import json
 import random
@@ -50,11 +31,8 @@ torch.cuda.set_device(device)
 print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
-# ============================================================
-# 0. CONFIGURATION
-# ============================================================
 
-SEED = 44
+SEED = 42
 LABELED_FRACTION = 0.10
 BATCH_SIZE_TRAIN = 16
 BATCH_SIZE_EVAL = 32
@@ -65,11 +43,9 @@ WEIGHT_DECAY = 1e-1
 NUM_CLASSES = 2
 IMG_SIZE = 28
 
-# Mini-batch sizes to test (number of batches to split unlabeled data into)
 NUM_BATCHES_TO_TEST = [10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]
 
-# Confidence threshold for pseudo-labeling
-CONFIDENCE_THRESHOLD = 0.55
+CONFIDENCE_THRESHOLD = 0.75
 
 PSEUDO_LABEL_ALPHA = 0.5
 
@@ -93,9 +69,6 @@ def set_seed(seed):
         torch.backends.cudnn.benchmark = False
 
 
-# ============================================================
-# 1. RESNET18 ARCHITECTURE (Single architecture for all models)
-# ============================================================
 class BasicBlock(nn.Module):
     expansion = 1
     
@@ -119,10 +92,6 @@ class BasicBlock(nn.Module):
 
 
 class ResNet18(nn.Module):
-    """
-    ResNet-18 architecture for 28x28 grayscale images.
-    Modified channel configuration [22, 44, 88, 176] for ~1.32M params.
-    """
     def __init__(self, num_classes=2, in_channels=1):
         super().__init__()
         self.in_planes = 22
@@ -187,18 +156,7 @@ class ResNet18(nn.Module):
         return x
 
 
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR BREASTMNIST
-# ============================================================
-# Based on medical imaging research:
-# - PMC10027281: Medical image augmentation techniques
-# - MDPI Sensors 2021: Med-Aug for optimal DA in medical DL
-# - Key finding: Noise-based augmentations work better than 
-#   aggressive intensity changes for medical images
-# ============================================================
-
 class AddGaussianNoise:
-    """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
         self.mean = mean
         self.std = std
@@ -209,7 +167,6 @@ class AddGaussianNoise:
 
 
 class AddSaltPepperNoise:
-    """Add salt-and-pepper noise to tensor."""
     def __init__(self, prob=0.02):
         self.prob = prob
     
@@ -222,7 +179,6 @@ class AddSaltPepperNoise:
 
 
 class AddSpeckleNoise:
-    """Add speckle noise (multiplicative) - common in ultrasound images."""
     def __init__(self, std=0.1):
         self.std = std
     
@@ -232,45 +188,28 @@ class AddSpeckleNoise:
 
 
 def get_augmentation_transforms():
-    """
-    Define three distinct augmentation strategies for BreastMNIST (grayscale).
-    
-    Key insight from research: For medical images, NOISE-BASED augmentations
-    are more effective than aggressive intensity changes.
-    
-    For ultrasound specifically:
-    - Speckle noise is characteristic of ultrasound imaging
-    - Gaussian noise simulates sensor noise
-    - Mild blur simulates probe coupling variations
-    """
-    
     normalize = transforms.Normalize(mean=[0.5], std=[0.5])  # GRAYSCALE: 1 channel
     
-    # Transform 1: MINIMAL (No Augmentation)
     transform_minimal = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
     
-    # Transform 2: NOISE/ARTIFACT Augmentation (replaces color jitter)
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.ToTensor(),
-        # Noise-based augmentations (applied to tensor)
         transforms.RandomApply([AddSpeckleNoise(std=0.08)], p=0.4),  # Ultrasound-specific
         transforms.RandomApply([AddGaussianNoise(mean=0.0, std=0.03)], p=0.3),
         transforms.RandomApply([AddSaltPepperNoise(prob=0.01)], p=0.2),
         transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.8))], p=0.25),
-        # Very mild brightness/contrast only
         transforms.RandomApply([
             transforms.ColorJitter(brightness=0.1, contrast=0.1)
         ], p=0.3),
         normalize
     ])
     
-    # Transform 3: SPATIAL
     transform_spatial = transforms.Compose([
         transforms.Resize((IMG_SIZE + 4, IMG_SIZE + 4)),
         transforms.RandomCrop(IMG_SIZE),
@@ -289,7 +228,7 @@ def get_augmentation_transforms():
     
     return {
         "minimal": transform_minimal,
-        "color": transform_noise,  # Key name kept for compatibility
+        "color": transform_noise,  
         "geometric": transform_spatial
     }
 
@@ -299,18 +238,12 @@ def get_eval_transform():
     return transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5], std=[0.5])  # 1 channel
+        transforms.Normalize(mean=[0.5], std=[0.5])  
     ])
 
 
-# ============================================================
-# 3. MULTI-AUGMENTATION DATASET WRAPPER
-# ============================================================
 
 class MultiAugmentationDataset(Dataset):
-    """
-    Dataset wrapper that returns multiple augmented views of each image.
-    """
     
     def __init__(self, base_dataset, transforms_dict):
         self.base_dataset = base_dataset
@@ -337,7 +270,6 @@ class MultiAugmentationDataset(Dataset):
 
 
 class MultiAugmentationSubset(Dataset):
-    """Subset wrapper for MultiAugmentationDataset."""
     
     def __init__(self, multi_aug_dataset, indices):
         self.dataset = multi_aug_dataset
@@ -352,7 +284,6 @@ class MultiAugmentationSubset(Dataset):
 
 
 class PseudoLabelMultiAugDataset(Dataset):
-    """Dataset that applies multiple augmentations with pseudo-labels."""
     
     def __init__(self, base_dataset, indices, pseudo_labels, transforms_dict):
         self.base_dataset = base_dataset
@@ -380,13 +311,8 @@ class PseudoLabelMultiAugDataset(Dataset):
         return img_minimal, img_color, img_geometric, label, 1
 
 
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
 class JointAugmentationEnsemble(nn.Module):
-    """
-    Joint Ensemble with SAME architecture but DIFFERENT augmentation views.
-    """
+
     
     def __init__(self, num_classes=2, in_channels=1):
         super().__init__()
@@ -424,7 +350,6 @@ class JointAugmentationEnsemble(nn.Module):
         return ensemble_logits
     
     def get_ensemble_probabilities(self, img):
-        """Get soft-voting probabilities for evaluation (single image input)."""
         self.eval()
         with torch.no_grad():
             logits_minimal = self.model_minimal(img)
@@ -440,11 +365,7 @@ class JointAugmentationEnsemble(nn.Module):
         return ensemble_probs
     
     def get_concatenated_features(self, img):
-        """
-        Extract concatenated penultimate features from all 3 models.
-        Returns (batch, 176*3=528) dimensional features.
-        Used for TypiClust.
-        """
+
         self.eval()
         with torch.no_grad():
             feat1 = self.model_minimal.get_penultimate_features(img)
@@ -468,9 +389,6 @@ class JointAugmentationEnsemble(nn.Module):
         print("="*70)
 
 
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
 
 def compute_class_weights(dataset_raw, labeled_indices):
     """
@@ -480,7 +398,6 @@ def compute_class_weights(dataset_raw, labeled_indices):
     labels = [int(dataset_raw.labels[idx][0]) for idx in labeled_indices]
     class_counts = np.bincount(labels, minlength=NUM_CLASSES)
     
-    # Inverse frequency weighting
     total = sum(class_counts)
     class_weights = total / (NUM_CLASSES * class_counts.astype(float))
     
@@ -515,7 +432,6 @@ def prepare_data():
     labeled_indices = indices[:n_labeled]
     unlabeled_indices = indices[n_labeled:]
     
-    # Compute class weights for imbalance handling
     class_weights = compute_class_weights(train_dataset_raw, labeled_indices)
     
     all_true_labels = {}
@@ -547,9 +463,6 @@ def prepare_data():
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
 
 def train_joint_ensemble(
     ensemble: JointAugmentationEnsemble,
@@ -561,9 +474,7 @@ def train_joint_ensemble(
     verbose: bool = False,
     pseudo_label_alpha: float = 1.0
 ) -> Tuple[JointAugmentationEnsemble, float, int]:
-    """
-    Train the joint augmentation ensemble with class-weighted loss.
-    """
+
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction='none')
     
     optimizer = optim.AdamW(ensemble.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
@@ -638,10 +549,6 @@ def train_joint_ensemble(
     return ensemble, best_val_auc, best_epoch
 
 def evaluate_joint_ensemble(ensemble: JointAugmentationEnsemble, loader: DataLoader) -> Dict:
-    """
-    Evaluate the joint ensemble on standard (non-augmented) data.
-    During evaluation, all models see the SAME image (no augmentation).
-    """
     ensemble.eval()
     
     all_ensemble_preds = []
@@ -698,9 +605,7 @@ def get_ensemble_predictions(
     eval_transform,
     confidence_threshold: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray, List[int]]:
-    """
-    Get predictions from the ensemble for pseudo-labeling.
-    """
+
     ensemble.eval()
     
     class SimpleEvalDataset(Dataset):
@@ -753,15 +658,8 @@ def get_ensemble_predictions(
     return predictions, confidences, accepted_indices
 
 
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
 
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
-    """
-    Extract concatenated penultimate features from all 3 models for given indices.
-    Returns (N, 528) numpy array (176 features * 3 models).
-    """
     ensemble.eval()
     
     class SimpleEvalDataset(Dataset):
@@ -793,33 +691,12 @@ def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
     
     return np.concatenate(all_features, axis=0)
 
-# def random_select(unlabeled_indices, batch_size):
-#     """
-#     RANDOM selection: Simply shuffle and select batch_size samples.
-#     ABLATION: Replaces TypiClust to test its contribution.
-#     """
-#     import random
-#     shuffled = unlabeled_indices.copy()
-#     random.shuffle(shuffled)
-    
-#     current_batch_size = min(batch_size, len(shuffled))
-#     selected_global = shuffled[:current_batch_size]
-#     remaining_global = shuffled[current_batch_size:]
-    
-#     print(f"    [RANDOM] Selected {len(selected_global)} samples randomly")
-#     return selected_global, remaining_global
 
 def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, batch_size):
-    """
-    TypiClust selection: Extract features, run k-means with k=batch_size,
-    select the sample nearest each centroid.
-    
-    Returns: list of lists, each inner list is a mini-batch of selected indices.
-    """
+
     print(f"    [TypiClust] Extracting features for {len(unlabeled_indices)} unlabeled samples...")
     features = extract_ensemble_features(ensemble, dataset_raw, unlabeled_indices, eval_transform)
     
-    # Normalize features for better clustering
     from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features)
@@ -828,7 +705,6 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     kmeans = KMeans(n_clusters=batch_size, random_state=42, n_init=10)
     cluster_labels = kmeans.fit_predict(features_scaled)
     
-    # For each cluster, find the sample nearest the centroid
     selected_local_indices = []
     for c in range(batch_size):
         cluster_mask = cluster_labels == c
@@ -837,17 +713,14 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
         if len(cluster_indices_local) == 0:
             continue
         
-        # Distance to centroid
         cluster_features = features_scaled[cluster_indices_local]
         centroid = kmeans.cluster_centers_[c]
         distances = np.linalg.norm(cluster_features - centroid, axis=1)
         nearest = cluster_indices_local[np.argmin(distances)]
         selected_local_indices.append(nearest)
-    
-    # Convert local indices to global indices
+
     selected_global = [unlabeled_indices[i] for i in selected_local_indices]
     
-    # The remaining indices (not selected)
     selected_set = set(selected_local_indices)
     remaining_local = [i for i in range(len(unlabeled_indices)) if i not in selected_set]
     remaining_global = [unlabeled_indices[i] for i in remaining_local]
@@ -857,29 +730,12 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     return selected_global, remaining_global
 
 
-# ============================================================
-# 8. JOINT ENSEMBLE SRPM-ST WITH TYPICLUST
-# ============================================================
-
 def run_joint_ensemble_srpm_st(
     data_dict: Dict,
     num_batches: int,
     verbose: bool = False
 ) -> Dict:
-    """
-    Run SRPM-ST with joint augmentation ensemble + TypiClust selection.
-    
-    Algorithm:
-    1. Train joint ensemble on labeled data
-    2. For each iteration:
-       a. Extract features from current ensemble for remaining unlabeled data
-       b. Run TypiClust to select M representative samples
-       c. Get ensemble predictions for selected samples
-       d. Filter by confidence threshold
-       e. Add accepted pseudo-labels to training set
-       f. RETRAIN FROM SCRATCH
-    3. Evaluate final ensemble
-    """
+
     ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=1).to(DEVICE)
     
     train_dataset_raw = data_dict["train_dataset_raw"]
@@ -894,13 +750,11 @@ def run_joint_ensemble_srpm_st(
     
     eval_transform = get_eval_transform()
     
-    # Compute batch_size (M) from num_batches
     batch_size_M = len(unlabeled_indices) // num_batches
     
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     
-    # Phase 1: Initial training on labeled data only
     if verbose:
         print(f"  Phase 1: Initial training on {len(labeled_indices)} labeled samples...")
     
@@ -914,7 +768,6 @@ def run_joint_ensemble_srpm_st(
     if verbose:
         print(f"    Initial ensemble Val AUC: {initial_val_auc:.4f}")
     
-    # Phase 2: Sequential TypiClust-based mini-batch pseudo-labeling
     pseudo_labels_dict = {}
     remaining_unlabeled = unlabeled_indices.copy()
     
@@ -924,10 +777,8 @@ def run_joint_ensemble_srpm_st(
                 print(f"  No more unlabeled samples. Stopping at iteration {batch_idx+1}.")
             break
         
-        # Determine how many to select this iteration
         current_M = min(batch_size_M, len(remaining_unlabeled))
         if current_M < 2:
-            # Can't do k-means with k < 2
             if verbose:
                 print(f"  Too few remaining samples ({len(remaining_unlabeled)}). Stopping.")
             break
@@ -936,26 +787,18 @@ def run_joint_ensemble_srpm_st(
             print(f"  Phase 2: TypiClust iteration {batch_idx+1}/{num_batches} "
                   f"(selecting {current_M} from {len(remaining_unlabeled)} remaining)...")
         
-        # TypiClust: select representative samples
         selected_indices, remaining_unlabeled = typiclust_select(
             ensemble, train_dataset_raw, remaining_unlabeled, eval_transform, current_M
         )
 
-        # selected_indices, remaining_unlabeled = random_select(
-        #     unlabeled_indices, batch_size
-        #     )
-        
-        # Get ensemble predictions for selected samples
         preds, confidences, accepted = get_ensemble_predictions(
             ensemble, train_dataset_raw, selected_indices, eval_transform, CONFIDENCE_THRESHOLD
         )
         
-        # Add pseudo-labels for accepted samples
         for i, idx in enumerate(selected_indices):
             if CONFIDENCE_THRESHOLD == 0 or confidences[i] >= CONFIDENCE_THRESHOLD:
                 pseudo_labels_dict[idx] = int(preds[i])
         
-        # Create combined dataset
         labeled_subset = MultiAugmentationSubset(train_multi_aug, labeled_indices)
         
         pseudo_indices = list(pseudo_labels_dict.keys())
@@ -972,7 +815,6 @@ def run_joint_ensemble_srpm_st(
         
         train_loader = DataLoader(combined_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True)
         
-        # Recompute class weights including pseudo-labels
         all_training_labels = [int(train_dataset_raw.labels[idx][0]) for idx in labeled_indices]
         all_training_labels += pseudo_labels_list
         training_counts = np.bincount(all_training_labels, minlength=NUM_CLASSES)
@@ -980,7 +822,6 @@ def run_joint_ensemble_srpm_st(
         updated_weights = total / (NUM_CLASSES * training_counts.astype(float))
         updated_class_weights = torch.FloatTensor(updated_weights).to(DEVICE)
         
-        # RETRAIN FROM SCRATCH per SRPM-ST Algorithm 1
         ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=1).to(DEVICE)
         
         ensemble, batch_val_auc, _ = train_joint_ensemble(
@@ -990,11 +831,9 @@ def run_joint_ensemble_srpm_st(
         if verbose:
             print(f"    Val AUC after iteration {batch_idx+1}: {batch_val_auc:.4f}")
     
-    # Final evaluation
     val_metrics = evaluate_joint_ensemble(ensemble, val_loader)
     test_metrics = evaluate_joint_ensemble(ensemble, test_loader)
     
-    # Compute pseudo-label accuracy
     correct = sum(1 for idx, pl in pseudo_labels_dict.items() if pl == true_labels[idx])
     pseudo_accuracy = correct / len(pseudo_labels_dict) if pseudo_labels_dict else 0
     
@@ -1014,12 +853,7 @@ def run_joint_ensemble_srpm_st(
     }
 
 
-# ============================================================
-# 9. MAIN TUNING LOOP
-# ============================================================
-
 def tune_num_batches(data_dict: Dict) -> Dict:
-    """Tune the number of mini-batches for joint augmentation ensemble SRPM-ST."""
     
     print("\n" + "="*70)
     print("TUNING NUMBER OF MINI-BATCHES FOR AUGMENTATION-BASED ENSEMBLE SRPM-ST")
@@ -1052,7 +886,6 @@ def tune_num_batches(data_dict: Dict) -> Dict:
 
 
 def save_results(all_results: List[Dict]):
-    """Save results to files."""
     import csv
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
