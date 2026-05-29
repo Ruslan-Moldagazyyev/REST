@@ -1,9 +1,5 @@
 """
 Augmentation-Based Joint Ensemble SRPM-ST - Multi-Seed Runner
-==============================================================
-ACRIMA: Glaucoma Detection (Fundus Images) with TRUE Joint Ensemble Training
-
-Adapted from Skin Cancer version for ACRIMA glaucoma dataset.
 
 KEY CHANGES FROM SKIN CANCER:
 1. Data loading: Handles "Glaucoma" and "Non Glaucoma" folder names
@@ -20,8 +16,6 @@ Dataset structure expected (Kaggle version):
     └── test/
         ├── Glaucoma/
         └── Non Glaucoma/
-
-Download from: https://www.kaggle.com/datasets/toaharahmanratul/acrima-dataset
 
 Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.4M params each for RGB)
 Diversity Source: Different augmentation strategies
