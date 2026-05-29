@@ -30,9 +30,6 @@ torch.cuda.set_device(device)
 print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
-# ============================================================
-# 0. CONFIGURATION
-# ===========================================================
 SEED = 43
 
 LABELED_FRACTION = 0.01
