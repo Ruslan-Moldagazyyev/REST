@@ -4,21 +4,15 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# Virtual environments
 venv/
 .venv/
 env/
 
-# Datasets (do not commit data — provide download instructions instead)
 data/
 *.npz
 datasets/
 
-# Model checkpoints
-*.pth
-*.pt
 
-# Experiment outputs / logs
 results_*/
 aug_ensemble_srpm_st_results_*/
 *.log
@@ -26,7 +20,6 @@ full_experiment_log.txt
 *.json
 *.csv
 
-# OS / editor cruft
 .DS_Store
 .idea/
 .vscode/
