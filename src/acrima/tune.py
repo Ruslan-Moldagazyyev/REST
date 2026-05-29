@@ -69,9 +69,6 @@ torch.cuda.set_device(device)
 print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
-# ============================================================
-# 0. CONFIGURATION
-# ============================================================
 
 SEED = 44
 LABELED_FRACTION = 0.02
@@ -82,26 +79,19 @@ EARLY_STOPPING_PATIENCE = 7
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-1
 NUM_CLASSES = 2
-IMG_SIZE = 64  # Resize fundus images to 64x64 (can try 128 if compute allows)
-IN_CHANNELS = 3  # RGB images
+IMG_SIZE = 64 
+IN_CHANNELS = 3  
 
-# Path to the ACRIMA dataset root folder
-# Adjust this path to where you extracted the dataset
+
 DATA_ROOT = os.environ.get("REST_DATA_ROOT", "./data/glaucoma")  # set REST_DATA_ROOT or edit this
 DATA_ROOT = os.path.expanduser(DATA_ROOT)
 
-# Validation split ratio (from training data, since Kaggle has train/test)
 VAL_SPLIT_RATIO = 0.15  # 15% of train for validation
 
-# Mini-batch sizes to test (smaller dataset = fewer batches)
-# With 705 images, ~70% for train = ~494 images
-# After 10% labeled split: ~445 unlabeled
 NUM_BATCHES_TO_TEST = [28, 30, 32, 34, 36, 38, 40]
 
-# Confidence threshold for pseudo-labeling
-CONFIDENCE_THRESHOLD = 0.95
+CONFIDENCE_THRESHOLD = 0.75
 
-# Alpha weight for pseudo-label loss (0-1)
 # Loss = CE(true_labels) + alpha * CE(pseudo_labels)
 PSEUDO_LABEL_ALPHA = 0.5
 
@@ -117,7 +107,6 @@ print(f"Image size: {IMG_SIZE}x{IMG_SIZE}")
 print(f"Confidence Threshold: {CONFIDENCE_THRESHOLD}")
 
 
-
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -127,10 +116,6 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-
-# ============================================================
-# 1. RESNET18 ARCHITECTURE (RGB input)
-# ============================================================
 class BasicBlock(nn.Module):
     expansion = 1
     
@@ -162,7 +147,6 @@ class ResNet18(nn.Module):
         super().__init__()
         self.in_planes = 22
         
-        # Initial conv for RGB input
         self.conv1 = nn.Conv2d(in_channels, 22, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(22)
         self.relu = nn.ReLU(inplace=True)
@@ -221,16 +205,7 @@ class ResNet18(nn.Module):
         x = self.avgpool(x)
         x = torch.flatten(x, 1)  # (batch, 176)
         return x
-
-
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR FUNDUS IMAGES
-# ============================================================
-# Based on domain-specific research:
-# - For medical images, NOISE-BASED augmentations work better than color jitter
-#   because color is diagnostic (e.g., vessel appearance, disc pallor)
-# - Fundus images benefit from geometric augmentations (rotation, flip)
-# ============================================================
+        
 
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
@@ -257,54 +232,38 @@ class AddSaltPepperNoise:
 
 
 def get_augmentation_transforms():
-    """
-    Define three distinct augmentation strategies for fundus images.
     
-    Key insight from research: For medical images, NOISE-BASED augmentations
-    are more effective than color jitter because color is diagnostic.
-    """
-    
-    # ImageNet-style normalization for RGB
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]
     )
     
-    # Transform 1: MINIMAL (No Augmentation) - clean anchor view
     transform_minimal = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
-    
-    # =========================================================
-    # Transform 2: NOISE/ARTIFACT Augmentation
-    # Simulates real imaging variations WITHOUT destroying color
-    # =========================================================
+
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
         transforms.ToTensor(),
-        # Noise-based augmentations (applied to tensor)
+
         transforms.RandomApply([AddGaussianNoise(mean=0.0, std=0.03)], p=0.4),
         transforms.RandomApply([AddSaltPepperNoise(prob=0.01)], p=0.2),
         transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.8))], p=0.3),
-        # Very mild brightness/contrast only (NOT color changing)
+
         transforms.RandomApply([
             transforms.ColorJitter(brightness=0.08, contrast=0.08, saturation=0, hue=0)
         ], p=0.3),
         normalize
     ])
     
-    # =========================================================
-    # Transform 3: GEOMETRIC/SPATIAL
-    # Simulates different capture conditions
-    # =========================================================
     transform_geometric = transforms.Compose([
         transforms.Resize((IMG_SIZE + 12, IMG_SIZE + 12)),
         transforms.RandomCrop(IMG_SIZE),
-        transforms.RandomRotation(degrees=180),  # Fundus can be rotated
+        transforms.RandomRotation(degrees=180), 
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
         transforms.RandomAffine(
@@ -319,7 +278,7 @@ def get_augmentation_transforms():
     
     return {
         "minimal": transform_minimal,
-        "color": transform_noise,  # Key name kept for compatibility
+        "color": transform_noise,  
         "geometric": transform_geometric
     }
 
@@ -336,28 +295,8 @@ def get_eval_transform():
     ])
 
 
-# ============================================================
-# 3. CUSTOM DATASET CLASSES FOR ACRIMA
-# ============================================================
-# Kaggle ACRIMA structure:
-#   DATA_ROOT/
-#   ├── train/
-#   │   ├── Glaucoma/
-#   │   │   └── Im###_g_ACRIMA.jpg
-#   │   └── Non Glaucoma/
-#   │       └── Im###_ACRIMA.jpg
-#   └── test/
-#       ├── Glaucoma/
-#       │   └── Im###_g_ACRIMA.jpg
-#       └── Non Glaucoma/
-#           └── Im###_ACRIMA.jpg
-# ============================================================
-
 class ACRIMADataset(Dataset):
-    """
-    Custom dataset for ACRIMA fundus images (Kaggle version).
-    Uses folder structure: split/class_name/images
-    """
+
     
     def __init__(self, root_dir, split='train', transform=None):
         """
@@ -375,7 +314,6 @@ class ACRIMADataset(Dataset):
         if not split_dir.exists():
             raise ValueError(f"Split directory not found: {split_dir}")
         
-        # Collect all image paths and labels
         self.image_paths = []
         self.labels = []
         
@@ -470,33 +408,17 @@ class MultiAugmentationDataset(Dataset):
         return len(self.base_dataset)
     
     def __getitem__(self, idx):
-        # Access raw image array (triggers lazy loading if needed)
         img_array = self.base_dataset.imgs[idx]
         label = self.base_dataset.labels[idx]
         
-        # Convert numpy array to PIL Image
         img_pil = Image.fromarray(img_array)
         
-        # Apply different transforms for each model
         img_minimal = self.transforms["minimal"](img_pil)
         img_color = self.transforms["color"](img_pil)
         img_geometric = self.transforms["geometric"](img_pil)
         
         return img_minimal, img_color, img_geometric, label
 
-
-# class MultiAugmentationSubset(Dataset):
-#     """Subset wrapper for MultiAugmentationDataset."""
-    
-#     def __init__(self, multi_aug_dataset, indices):
-#         self.dataset = multi_aug_dataset
-#         self.indices = indices
-    
-#     def __len__(self):
-#         return len(self.indices)
-    
-#     def __getitem__(self, idx):
-#         return self.dataset[self.indices[idx]]
 
 class MultiAugmentationSubset(Dataset):
     """Subset wrapper for MultiAugmentationDataset. Returns is_pseudo=0 (true labels)."""
@@ -538,15 +460,10 @@ class PseudoLabelMultiAugDataset(Dataset):
         
         label = np.array([self.pseudo_labels[idx]], dtype=np.int64)
         
-        # Return is_pseudo = 1 (this is a pseudo-labeled sample)
         return img_minimal, img_color, img_geometric, label, 1
 
 
 class EvalSubset(Dataset):
-    """
-    Evaluation subset that applies eval_transform to images.
-    Used for validation and test loaders.
-    """
     
     def __init__(self, base_dataset, indices, transform):
         self.base_dataset = base_dataset
@@ -567,13 +484,7 @@ class EvalSubset(Dataset):
         return img, label
 
 
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
 class JointAugmentationEnsemble(nn.Module):
-    """
-    Joint Ensemble with SAME architecture but DIFFERENT augmentation views.
-    """
     
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
@@ -628,11 +539,7 @@ class JointAugmentationEnsemble(nn.Module):
         return ensemble_probs
     
     def get_concatenated_features(self, img):
-        """
-        Extract concatenated penultimate features from all 3 models.
-        Returns (batch, 176*3=528) dimensional features.
-        Used for TypiClust.
-        """
+        
         self.eval()
         with torch.no_grad():
             feat1 = self.model_minimal.get_penultimate_features(img)
@@ -657,15 +564,9 @@ class JointAugmentationEnsemble(nn.Module):
         print("="*70)
 
 
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
 
 def compute_class_weights(dataset_raw, indices):
-    """
-    Compute inverse frequency class weights for handling class imbalance.
-    Returns a tensor of weights suitable for nn.CrossEntropyLoss.
-    """
+    
     labels = [int(dataset_raw.labels[idx][0]) for idx in indices]
     class_counts = np.bincount(labels, minlength=NUM_CLASSES)
     
@@ -682,16 +583,11 @@ def compute_class_weights(dataset_raw, indices):
 
 
 def prepare_data():
-    """
-    Prepare ACRIMA data with labeled/unlabeled split.
-    Uses Kaggle structure: train/ and test/ folders with class subfolders.
-    Creates validation set from training data.
-    """
+    
     print("\n" + "="*60)
     print("DATA PREPARATION - ACRIMA: Glaucoma Detection")
     print("="*60)
-    
-    # Check if data exists
+
     train_dir = Path(DATA_ROOT) / 'train'
     test_dir = Path(DATA_ROOT) / 'test'
     
@@ -706,20 +602,17 @@ def prepare_data():
     aug_transforms = get_augmentation_transforms()
     eval_transform = get_eval_transform()
     
-    # Load training data (no transform - we'll apply transforms manually)
     print("\nLoading training data...")
     train_dataset_raw = ACRIMADataset(DATA_ROOT, split='train', transform=None)
     
-    # Load test data
     print("Loading test data...")
     test_dataset_raw = ACRIMADataset(DATA_ROOT, split='test', transform=None)
     
-    # Create validation split from training data
+    # create validation split from training data
     n_train_total = len(train_dataset_raw)
     all_train_indices = list(range(n_train_total))
     train_labels = [int(train_dataset_raw.labels[i][0]) for i in all_train_indices]
     
-    # Stratified split for train/val
     train_indices, val_indices = train_test_split(
         all_train_indices,
         test_size=VAL_SPLIT_RATIO,
@@ -727,14 +620,11 @@ def prepare_data():
         random_state=SEED
     )
     
-    # Create multi-augmentation wrapper for training
     train_multi_aug = MultiAugmentationDataset(train_dataset_raw, aug_transforms)
     
-    # Create evaluation datasets for val and test
     val_dataset = EvalSubset(train_dataset_raw, val_indices, eval_transform)
     test_dataset = EvalSubset(test_dataset_raw, list(range(len(test_dataset_raw))), eval_transform)
     
-    # From the train_indices, create labeled/unlabeled split
     n_train = len(train_indices)
     n_labeled = int(n_train * LABELED_FRACTION)
     
@@ -742,16 +632,13 @@ def prepare_data():
     labeled_indices = train_indices[:n_labeled]
     unlabeled_indices = train_indices[n_labeled:]
     
-    # Compute class weights for imbalance handling
     class_weights = compute_class_weights(train_dataset_raw, labeled_indices)
     
-    # Store true labels for all training samples (for pseudo-label accuracy computation)
     all_true_labels = {}
     for idx in range(n_train_total):
         label = train_dataset_raw.labels[idx]
         all_true_labels[idx] = int(label[0])
     
-    # Count class distribution
     train_labels_arr = np.array([train_dataset_raw.labels[i][0] for i in train_indices])
     normal_count = np.sum(train_labels_arr == 0)
     glaucoma_count = np.sum(train_labels_arr == 1)
@@ -782,10 +669,6 @@ def prepare_data():
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
-
 def train_joint_ensemble(
     ensemble: JointAugmentationEnsemble,
     train_loader: DataLoader,
@@ -794,12 +677,11 @@ def train_joint_ensemble(
     lr: float,
     class_weights: torch.Tensor,
     verbose: bool = False,
-    pseudo_label_alpha: float = 1.0  # ADD THIS PARAMETER
+    pseudo_label_alpha: float = 1.0  
 ) -> Tuple[JointAugmentationEnsemble, float, int]:
     """
     Train the joint augmentation ensemble with class-weighted loss.
     """
-    # CLASS-WEIGHTED LOSS to handle imbalance
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction='none')
     
     optimizer = optim.AdamW(ensemble.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
@@ -816,7 +698,7 @@ def train_joint_ensemble(
         num_batches = 0
         
         for batch in train_loader:
-            if len(batch) == 5:  # Has pseudo-label flag
+            if len(batch) == 5:  
                 img_minimal, img_color, img_geometric, labels, is_pseudo = batch
                 is_pseudo = is_pseudo.float().to(DEVICE)
             else:
@@ -875,10 +757,6 @@ def train_joint_ensemble(
 
 
 def evaluate_joint_ensemble(ensemble: JointAugmentationEnsemble, loader: DataLoader) -> Dict:
-    """
-    Evaluate the joint ensemble on standard (non-augmented) data.
-    During evaluation, all models see the SAME image (no augmentation).
-    """
     ensemble.eval()
     
     all_ensemble_preds = []
@@ -911,7 +789,6 @@ def evaluate_joint_ensemble(ensemble: JointAugmentationEnsemble, loader: DataLoa
     all_labels = np.array(all_labels)
     all_ensemble_probs = np.array(all_ensemble_probs)
     
-    # Binary classification
     ensemble_probs_positive = all_ensemble_probs[:, 1]
     results = {
         "ensemble_balanced_acc": balanced_accuracy_score(all_labels, np.array(all_ensemble_preds)),
@@ -935,9 +812,7 @@ def get_ensemble_predictions(
     eval_transform,
     confidence_threshold: float = 0.0
 ) -> Tuple[np.ndarray, np.ndarray, List[int]]:
-    """
-    Get predictions from the ensemble for pseudo-labeling.
-    """
+
     ensemble.eval()
     
     class SimpleEvalDataset(Dataset):
@@ -989,15 +864,8 @@ def get_ensemble_predictions(
     return predictions, confidences, accepted_indices
 
 
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
 
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
-    """
-    Extract concatenated penultimate features from all 3 models for given indices.
-    Returns (N, 528) numpy array (176 features * 3 models).
-    """
     ensemble.eval()
     
     class SimpleEvalDataset(Dataset):
@@ -1030,16 +898,9 @@ def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
 
 
 def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, batch_size):
-    """
-    TypiClust selection: Extract features, run k-means with k=batch_size,
-    select the sample nearest each centroid.
-    
-    Returns: list of lists, each inner list is a mini-batch of selected indices.
-    """
     print(f"    [TypiClust] Extracting features for {len(unlabeled_indices)} unlabeled samples...")
     features = extract_ensemble_features(ensemble, dataset_raw, unlabeled_indices, eval_transform)
     
-    # Normalize features for better clustering
     from sklearn.preprocessing import StandardScaler
     scaler = StandardScaler()
     features_scaled = scaler.fit_transform(features)
@@ -1048,7 +909,6 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     kmeans = KMeans(n_clusters=batch_size, random_state=42, n_init=10)
     cluster_labels = kmeans.fit_predict(features_scaled)
     
-    # For each cluster, find the sample nearest the centroid
     selected_local_indices = []
     for c in range(batch_size):
         cluster_mask = cluster_labels == c
@@ -1057,17 +917,14 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
         if len(cluster_indices_local) == 0:
             continue
         
-        # Distance to centroid
         cluster_features = features_scaled[cluster_indices_local]
         centroid = kmeans.cluster_centers_[c]
         distances = np.linalg.norm(cluster_features - centroid, axis=1)
         nearest = cluster_indices_local[np.argmin(distances)]
         selected_local_indices.append(nearest)
     
-    # Convert local indices to global indices
     selected_global = [unlabeled_indices[i] for i in selected_local_indices]
     
-    # The remaining indices (not selected)
     selected_set = set(selected_local_indices)
     remaining_local = [i for i in range(len(unlabeled_indices)) if i not in selected_set]
     remaining_global = [unlabeled_indices[i] for i in remaining_local]
@@ -1077,29 +934,13 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     return selected_global, remaining_global
 
 
-# ============================================================
-# 8. JOINT ENSEMBLE SRPM-ST WITH TYPICLUST
-# ============================================================
 
 def run_joint_ensemble_srpm_st(
     data_dict: Dict,
     num_batches: int,
     verbose: bool = False
 ) -> Dict:
-    """
-    Run SRPM-ST with joint augmentation ensemble + TypiClust selection.
-    
-    Algorithm:
-    1. Train joint ensemble on labeled data
-    2. For each iteration:
-       a. Extract features from current ensemble for remaining unlabeled data
-       b. Run TypiClust to select M representative samples
-       c. Get ensemble predictions for selected samples
-       d. Filter by confidence threshold
-       e. Add accepted pseudo-labels to training set
-       f. RETRAIN FROM SCRATCH
-    3. Evaluate final ensemble
-    """
+
     ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=IN_CHANNELS).to(DEVICE)
     
     train_dataset_raw = data_dict["train_dataset_raw"]
@@ -1114,13 +955,11 @@ def run_joint_ensemble_srpm_st(
     
     eval_transform = get_eval_transform()
     
-    # Compute batch_size (M) from num_batches
     batch_size_M = len(unlabeled_indices) // num_batches
     
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
-    
-    # Phase 1: Initial training on labeled data only
+
     if verbose:
         print(f"  Phase 1: Initial training on {len(labeled_indices)} labeled samples...")
     
@@ -1134,7 +973,6 @@ def run_joint_ensemble_srpm_st(
     if verbose:
         print(f"    Initial ensemble Val AUC: {initial_val_auc:.4f}")
     
-    # Phase 2: Sequential TypiClust-based mini-batch pseudo-labeling
     pseudo_labels_dict = {}
     remaining_unlabeled = unlabeled_indices.copy()
     
@@ -1144,10 +982,8 @@ def run_joint_ensemble_srpm_st(
                 print(f"  No more unlabeled samples. Stopping at iteration {batch_idx+1}.")
             break
         
-        # Determine how many to select this iteration
         current_M = min(batch_size_M, len(remaining_unlabeled))
         if current_M < 2:
-            # Can't do k-means with k < 2
             if verbose:
                 print(f"  Too few remaining samples ({len(remaining_unlabeled)}). Stopping.")
             break
@@ -1155,35 +991,25 @@ def run_joint_ensemble_srpm_st(
         if verbose:
             print(f"  Phase 2: TypiClust iteration {batch_idx+1}/{num_batches} "
                   f"(selecting {current_M} from {len(remaining_unlabeled)} remaining)...")
-        
-        # TypiClust: select representative samples
+
         selected_indices, remaining_unlabeled = typiclust_select(
             ensemble, train_dataset_raw, remaining_unlabeled, eval_transform, current_M
         )
-        
-        # Get ensemble predictions for selected samples
+
         preds, confidences, accepted = get_ensemble_predictions(
             ensemble, train_dataset_raw, selected_indices, eval_transform, CONFIDENCE_THRESHOLD
         )
         
-        # # Add pseudo-labels for accepted samples
-        # for i, idx in enumerate(selected_indices):
-        #     if CONFIDENCE_THRESHOLD == 0 or confidences[i] >= CONFIDENCE_THRESHOLD:
-        #         pseudo_labels_dict[idx] = int(preds[i])
-
-        # Add pseudo-labels for accepted samples
         accepted_count = 0
         for i, idx in enumerate(selected_indices):
             if CONFIDENCE_THRESHOLD == 0 or confidences[i] >= CONFIDENCE_THRESHOLD:
                 pseudo_labels_dict[idx] = int(preds[i])
                 accepted_count += 1
         
-        # Log acceptance rate for this batch
         acceptance_rate = accepted_count / len(selected_indices) * 100
         if verbose:
             print(f"    Acceptance rate: {accepted_count}/{len(selected_indices)} ({acceptance_rate:.1f}%)")
         
-        # Create combined dataset
         labeled_subset = MultiAugmentationSubset(train_multi_aug, labeled_indices)
         
         pseudo_indices = list(pseudo_labels_dict.keys())
@@ -1200,7 +1026,6 @@ def run_joint_ensemble_srpm_st(
         
         train_loader = DataLoader(combined_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True)
         
-        # Recompute class weights including pseudo-labels
         all_training_labels = [int(train_dataset_raw.labels[idx][0]) for idx in labeled_indices]
         all_training_labels += pseudo_labels_list
         training_counts = np.bincount(all_training_labels, minlength=NUM_CLASSES)
@@ -1208,7 +1033,6 @@ def run_joint_ensemble_srpm_st(
         updated_weights = total / (NUM_CLASSES * training_counts.astype(float))
         updated_class_weights = torch.FloatTensor(updated_weights).to(DEVICE)
         
-        # RETRAIN FROM SCRATCH per SRPM-ST Algorithm 1
         ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=IN_CHANNELS).to(DEVICE)
         
         ensemble, batch_val_auc, _ = train_joint_ensemble(
@@ -1217,24 +1041,19 @@ def run_joint_ensemble_srpm_st(
         
         if verbose:
             print(f"    Val AUC after iteration {batch_idx+1}: {batch_val_auc:.4f}")
-    
-    # Final evaluation
+
     val_metrics = evaluate_joint_ensemble(ensemble, val_loader)
     test_metrics = evaluate_joint_ensemble(ensemble, test_loader)
     
-    # Compute pseudo-label accuracy
     correct = sum(1 for idx, pl in pseudo_labels_dict.items() if pl == true_labels[idx])
     pseudo_accuracy = correct / len(pseudo_labels_dict) if pseudo_labels_dict else 0
     
-    # Compute class distribution of pseudo-labels
     pseudo_class_0 = sum(1 for pl in pseudo_labels_dict.values() if pl == 0)
     pseudo_class_1 = sum(1 for pl in pseudo_labels_dict.values() if pl == 1)
     
-    # Compute overall acceptance rate
     total_unlabeled = len(data_dict["unlabeled_indices"])
     overall_acceptance_rate = len(pseudo_labels_dict) / total_unlabeled if total_unlabeled > 0 else 0
     
-    # Print summary
     print(f"\n    === Pseudo-Label Summary ===")
     print(f"    Total unlabeled: {total_unlabeled}")
     print(f"    Accepted pseudo-labels: {len(pseudo_labels_dict)} ({overall_acceptance_rate*100:.1f}%)")
@@ -1259,10 +1078,6 @@ def run_joint_ensemble_srpm_st(
         "resnet_geometric_test_auc": test_metrics["ResNet18_Geometric_auc"],
     }
 
-
-# ============================================================
-# 9. MAIN TUNING LOOP
-# ============================================================
 
 def tune_num_batches(data_dict: Dict) -> Dict:
     """Tune the number of mini-batches for joint augmentation ensemble SRPM-ST."""
