@@ -131,7 +131,7 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-# 1. RESNET18 architecture
+# RESNET18 architecture
 class BasicBlock(nn.Module):
     """Basic residual block for ResNet."""
     expansion = 1
@@ -223,7 +223,7 @@ class ResNet18(nn.Module):
         x = torch.flatten(x, 1)  # (batch, 176)
         return x
 
-# 2. augmentation for fundus images
+# augmentation for fundus images
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
@@ -249,27 +249,19 @@ class AddSaltPepperNoise:
 
 
 def get_augmentation_transforms():
-    """
-    Define three distinct augmentation strategies for fundus images.
-    
-    Key insight: For medical images, NOISE-BASED augmentations
-    are more effective than color jitter because color is diagnostic.
-    """
-    
-    # ImageNet-style normalization for RGB
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]
     )
     
-    # Transform 1: PURE (No Augmentation)
+    # PURE tranformation (No augmentation)
     transform_pure = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
     
-    # Transform 2: NOISE/ARTIFACT Augmentation
+    # noise augmentation
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -284,7 +276,7 @@ def get_augmentation_transforms():
         normalize
     ])
     
-    # Transform 3: GEOMETRIC/SPATIAL
+    # geometric transform
     transform_geometric = transforms.Compose([
         transforms.Resize((IMG_SIZE + 12, IMG_SIZE + 12)),
         transforms.RandomCrop(IMG_SIZE),
@@ -319,16 +311,7 @@ def get_eval_transform():
         )
     ])
 
-
-# ============================================================
-# 3. CUSTOM DATASET CLASSES FOR ACRIMA
-# ============================================================
-
 class ACRIMADataset(Dataset):
-    """
-    Custom dataset for ACRIMA fundus images (Kaggle version).
-    Uses folder structure: split/class_name/images
-    """
     
     def __init__(self, root_dir, split='train', transform=None):
         """
@@ -346,11 +329,9 @@ class ACRIMADataset(Dataset):
         if not split_dir.exists():
             raise ValueError(f"Split directory not found: {split_dir}")
         
-        # Collect all image paths and labels
         self.image_paths = []
         self.labels = []
         
-        # Class mapping: Non Glaucoma=0, Glaucoma=1
         class_mappings = {
             'non glaucoma': 0, 'nonglaucoma': 0, 'normal': 0, 'non_glaucoma': 0,
             'glaucoma': 1
@@ -416,7 +397,6 @@ class ACRIMADataset(Dataset):
 
 
 class MultiAugmentationDataset(Dataset):
-    """Dataset wrapper that returns multiple augmented views of each image."""
     
     def __init__(self, base_dataset, transforms_dict):
         self.base_dataset = base_dataset
@@ -439,7 +419,6 @@ class MultiAugmentationDataset(Dataset):
 
 
 class MultiAugmentationSubset(Dataset):
-    """Subset wrapper for MultiAugmentationDataset. Returns is_pseudo=0 (true labels)."""
     
     def __init__(self, multi_aug_dataset, indices):
         self.dataset = multi_aug_dataset
@@ -454,7 +433,6 @@ class MultiAugmentationSubset(Dataset):
 
 
 class PseudoLabelMultiAugDataset(Dataset):
-    """Dataset that applies multiple augmentations with pseudo-labels. Returns is_pseudo=1."""
     
     def __init__(self, base_dataset, indices, pseudo_labels, transforms_dict):
         self.base_dataset = base_dataset
@@ -481,7 +459,6 @@ class PseudoLabelMultiAugDataset(Dataset):
 
 
 class EvalSubset(Dataset):
-    """Evaluation subset with transform applied."""
     
     def __init__(self, base_dataset, indices, transform):
         self.base_dataset = base_dataset
@@ -502,14 +479,7 @@ class EvalSubset(Dataset):
         return img, label
 
 
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
-
 class JointAugmentationEnsemble(nn.Module):
-    """
-    Joint Ensemble with SAME architecture but DIFFERENT augmentation views.
-    """
     
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
@@ -563,10 +533,6 @@ class JointAugmentationEnsemble(nn.Module):
         return ensemble_probs
     
     def get_concatenated_features(self, img):
-        """
-        Extract concatenated penultimate features from all 3 models.
-        Returns (batch, 176*3=528) dimensional features for TypiClust.
-        """
         self.eval()
         with torch.no_grad():
             feat1 = self.model_minimal.get_penultimate_features(img)
@@ -597,10 +563,6 @@ def build_joint_ensemble():
     ensemble.print_param_counts()
     return ensemble
 
-
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
 
 def compute_class_weights(dataset_raw, indices):
     """Compute inverse frequency class weights for handling class imbalance."""
@@ -715,10 +677,6 @@ def prepare_data(seed, num_batches):
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
-
 def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
                          class_weights, verbose=True, pseudo_label_alpha=1.0):
     """Train the joint augmentation ensemble with class-weighted loss."""
@@ -793,7 +751,6 @@ def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
 
 
 def evaluate_joint_ensemble(ensemble, loader):
-    """Evaluate the joint ensemble on standard (non-augmented) data."""
     ensemble.eval()
     
     all_ensemble_preds = []
@@ -848,10 +805,6 @@ def evaluate_joint_ensemble(ensemble, loader):
     
     return results
 
-
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
 
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
     """Extract concatenated penultimate features from all 3 models."""
@@ -924,13 +877,8 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     return selected_global, remaining_global
 
 
-# ============================================================
-# 8. ENSEMBLE CONFIDENCE PSEUDO-LABELING
-# ============================================================
-
 def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, true_labels,
                                         eval_transform, confidence_threshold=0.75):
-    """Generate pseudo-labels using joint ensemble confidence."""
     n_samples = len(batch_indices)
     
     class SimpleEvalDataset(Dataset):
@@ -1007,12 +955,7 @@ def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, tr
     return accepted_indices, accepted_labels, stats
 
 
-# ============================================================
-# 9. UPPER BOUND EXPERIMENT (100% Labeled)
-# ============================================================
-
 def run_upper_bound_experiment(data_dict):
-    """Train joint ensemble with 100% labeled data to establish upper bound."""
     print("\n" + "="*70)
     print("UPPER BOUND EXPERIMENT: 100% LABELED DATA (AUGMENTATION ENSEMBLE)")
     print("="*70)
@@ -1059,12 +1002,7 @@ def run_upper_bound_experiment(data_dict):
     return upper_bound_metrics
 
 
-# ============================================================
-# 10. FULL-BATCH SELF-TRAINING BASELINE
-# ============================================================
-
 def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full_Batch_ST"):
-    """Full-Batch Self-Training (F-ST) baseline with augmentation ensemble."""
     
     print("\n" + "="*70)
     print(f"EXPERIMENT: {experiment_name}")
@@ -1088,7 +1026,6 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE_EVAL, shuffle=False)
     
-    # Phase 1: Initial Training
     print("\n--- Phase 1: Initial Augmentation Ensemble Training on Labeled Data ---")
     
     labeled_subset = MultiAugmentationSubset(train_multi_aug, labeled_indices)
@@ -1107,7 +1044,6 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
         init_metrics[name] = {"val": init_val[name], "test": init_test[name]}
         print(f"    {name} - Val AUC: {init_val[name]['auc']:.4f}, Test AUC: {init_test[name]['auc']:.4f}")
     
-    # Phase 2: Pseudo-label all unlabeled
     print("\n--- Phase 2: Pseudo-label ALL Unlabeled Data (Full-Batch) ---")
     print(f"    Total unlabeled samples: {len(unlabeled_indices)}")
     
@@ -1122,7 +1058,6 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
           f"rejected: {stats['avg_confidence_rejected']:.4f}")
     print(f"    Accepted per class: {stats['class_distribution']}")
 
-    # Phase 3: Retrain from scratch
     print("\n--- Phase 3: Retrain Augmentation Ensemble from Scratch ---")
     
     ensemble = build_joint_ensemble()
@@ -1171,10 +1106,6 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
     }
 
 
-# ============================================================
-# 11. AUGMENTATION ENSEMBLE SRPM-ST WITH TYPICLUST
-# ============================================================
-
 def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name="Aug_Ensemble_SRPM_ST"):
     """
     SRPM-ST with Augmentation-Based Joint Ensemble + TypiClust.
@@ -1208,7 +1139,7 @@ def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name=
     iteration_results = []
     pseudo_label_stats = []
     
-    # Phase 1: Initial Training
+    # phase 1. initial training
     print("\n--- Phase 1: Initial Augmentation Ensemble Training on Labeled Data ---")
     
     labeled_subset = MultiAugmentationSubset(train_multi_aug, labeled_indices)
@@ -1236,7 +1167,7 @@ def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name=
     
     initial_training_metrics = copy.deepcopy(init_metrics)
     
-    # Phase 2: Sequential TypiClust-based Mini-Batch Processing
+    # phase 2. sequential typiclust-based mini-batch processing
     print("\n--- Phase 2: Sequential Mini-Batch Processing (TYPICLUST + AUGMENTATION ENSEMBLE) ---")
     print(f"    Using: TypiClust selection + Ensemble Confidence (>= {confidence_threshold})")
     print(f"    RETRAINING FROM SCRATCH each iteration (per SRPM-ST Algorithm 1)")
@@ -1306,7 +1237,7 @@ def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name=
         updated_weights = total / (NUM_CLASSES * training_counts.astype(float))
         updated_class_weights = torch.FloatTensor(updated_weights).to(DEVICE)
         
-        # RETRAIN FROM SCRATCH per SRPM-ST Algorithm 1
+        # retrain from scratch per SRPM-ST
         ensemble = JointAugmentationEnsemble(num_classes=NUM_CLASSES, in_channels=IN_CHANNELS).to(DEVICE)
         
         ensemble, best_auc, best_epoch = train_joint_ensemble(
@@ -1351,10 +1282,6 @@ def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name=
         "final_ensemble_state": ensemble.state_dict()
     }, ensemble
 
-
-# ============================================================
-# 12. REPORTING AND SAVING
-# ============================================================
 
 def print_final_results(results, upper_bound_metrics=None):
     """Print final results."""
@@ -1474,10 +1401,6 @@ def save_results(results, upper_bound_metrics, fst_results, output_dir, seed):
     print(f"Summary saved to: {summary_path}")
 
 
-# ============================================================
-# 13. MAIN EXECUTION
-# ============================================================
-
 def run_single_seed(seed, num_batches, base_output_dir):
     """Run experiment for a single seed."""
     
@@ -1516,9 +1439,8 @@ def run_single_seed(seed, num_batches, base_output_dir):
 def main():
     """Main function to run experiments for multiple seeds."""
     
-    # Configuration - update these based on your tuning results
     SEEDS = [42, 43, 44]
-    NUM_BATCHES = [34, 32, 36]  # Update with optimal values from tuning (8 had best test AUC: 0.9745)
+    NUM_BATCHES = [34, 32, 36]  # Update with optimal values from tuning 
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base_output_dir = f"results_aug_ensemble_acrima/{timestamp}"
