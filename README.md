@@ -7,33 +7,6 @@ Framework for Semi-Supervised Medical Image Classification."**
 
 ---
 
-## Overview
-
-REST is a semi-supervised self-training framework for medical image
-classification with very few labels. It extends Sequential Retraining and
-Pseudo-labeling in Mini-batches (SRPM-ST) with three modifications:
-
-1. **Augmentation-based ensemble.** The single base classifier is replaced by
-   three jointly trained ResNet-18 networks. Each network sees a complementary
-   augmented view of the same image (clean, noise-based, and geometric). The
-   three networks are trained together with a shared optimizer by averaging
-   their logits, and their predictions are combined by soft voting at inference.
-2. **Representative mini-batch selection (TypiClust).** Instead of random
-   mini-batches, REST extracts penultimate-layer features from the current
-   ensemble and runs *k*-means on the unlabeled pool, selecting the sample
-   nearest each cluster centroid.
-3. **Class-weighted loss with pseudo-label attenuation.** A class-weighted
-   cross-entropy loss down-weights pseudo-labeled samples (by a factor
-   `alpha`) to mitigate class imbalance and label noise.
-
-REST is evaluated on three medical image datasets — **BreastMNIST**,
-**ISIC Skin Cancer**, and **ACRIMA (glaucoma)** — using only 1–10% of the
-labels, and consistently outperforms the initial classifier, single/ensemble
-full-batch self-training (F-ST), and the consistency-based SSL methods
-FixMatch and FlexMatch.
-
----
-
 ## Repository structure
 
 ```
