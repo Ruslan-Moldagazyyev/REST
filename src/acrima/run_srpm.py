@@ -1,37 +1,3 @@
-"""
-Augmentation-Based Joint Ensemble SRPM-ST - Multi-Seed Runner
-
-KEY CHANGES FROM SKIN CANCER:
-1. Data loading: Handles "Glaucoma" and "Non Glaucoma" folder names
-2. Class names: non-glaucoma=0, glaucoma=1
-3. Dataset size: 705 images (smaller than skin cancer)
-
-Dataset structure expected (Kaggle version):
-    data_root/
-    ├── train/
-    │   ├── Glaucoma/
-    │   │   └── Im###_g_ACRIMA.jpg
-    │   └── Non Glaucoma/
-    │       └── Im###_ACRIMA.jpg
-    └── test/
-        ├── Glaucoma/
-        └── Non Glaucoma/
-
-Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.4M params each for RGB)
-Diversity Source: Different augmentation strategies
-  - Model 1: Pure (no augmentation at all)
-  - Model 2: Noise/Artifact (Gaussian noise, salt-pepper, blur)
-  - Model 3: Geometric (rotation, translation, scale, shear, flips)
-
-Training Flow:
-- Forward: Each model gets its augmented view → Average logits → Loss (class-weighted)
-- Backward: Gradients flow to ALL models
-- Update: Single optimizer updates all
-
-Author: Ruslan Moldagazyyev, Prashant Jamwal, Azamat Mukhamediya  (SSL Research Project)
-Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
-"""
-
 import os
 import sys
 import json
@@ -97,10 +63,9 @@ EARLY_STOPPING_PATIENCE = 7
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-1
 NUM_CLASSES = 2  # binary classification
-IMG_SIZE = 64    # original imgage resized to 64x64
+IMG_SIZE = 64    
 IN_CHANNELS = 3  # RGB
 
-# path to the dataset
 DATA_ROOT = os.environ.get("REST_DATA_ROOT", "./data/glaucoma")  # set REST_DATA_ROOT or edit this
 DATA_ROOT = os.path.expanduser(DATA_ROOT)
 
@@ -150,10 +115,6 @@ class BasicBlock(nn.Module):
 
 
 class ResNet18(nn.Module):
-    """
-    ResNet-18 architecture for RGB images.
-    modified channel configuration [22, 44, 88, 176] (~1.4M params)
-    """
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
         self.in_planes = 22
@@ -217,7 +178,6 @@ class ResNet18(nn.Module):
         x = torch.flatten(x, 1)  # (batch, 176)
         return x
 
-# augmentation for fundus images
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
@@ -308,12 +268,6 @@ def get_eval_transform():
 class ACRIMADataset(Dataset):
     
     def __init__(self, root_dir, split='train', transform=None):
-        """
-        Args:
-            root_dir: Path to dataset root (contains train/ and test/ folders)
-            split: 'train' or 'test'
-            transform: Optional transform to apply
-        """
         self.root_dir = Path(root_dir)
         self.split = split
         self.transform = transform
@@ -1101,10 +1055,6 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
 
 
 def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name="Aug_Ensemble_SRPM_ST"):
-    """
-    SRPM-ST with Augmentation-Based Joint Ensemble + TypiClust.
-    RETRAINING FROM SCRATCH per SRPM-ST Algorithm 1.
-    """
     
     print("\n" + "="*70)
     print(f"EXPERIMENT: {experiment_name}")
