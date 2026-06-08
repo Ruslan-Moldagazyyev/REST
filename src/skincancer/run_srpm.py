@@ -1,43 +1,3 @@
-"""
-Augmentation-Based Joint Ensemble SRPM-ST - Multi-Seed Runner
-==============================================================
-Skin Cancer: Malignant vs. Benign (Kaggle) with TRUE Joint Ensemble Training
-
-Adapted from BreastMNIST version for Kaggle Skin Cancer dataset.
-
-KEY CHANGES FROM BREASTMNIST:
-1. Data loading: Custom ImageFolder-based loading (Kaggle folder structure)
-2. Input channels: RGB (3 channels) instead of grayscale (1 channel)
-3. Image size: 64x64 (configurable)
-4. Validation split: Created from training data (Kaggle only has train/test)
-5. Normalization: ImageNet-style RGB normalization
-
-Dataset structure expected:
-    data_root/
-    ├── train/
-    │   ├── benign/
-    │   └── malignant/
-    └── test/
-        ├── benign/
-        └── malignant/
-
-Download from: https://www.kaggle.com/datasets/fanconic/skin-cancer-malignant-vs-benign
-
-Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.4M params each for RGB)
-Diversity Source: Different augmentation strategies
-  - Model 1: Pure (no augmentation at all)
-  - Model 2: Intensity (brightness, contrast, saturation, hue)
-  - Model 3: Geometric (rotation, translation, scale, shear, flips)
-
-Training Flow:
-- Forward: Each model gets its augmented view → Average logits → Loss (class-weighted)
-- Backward: Gradients flow to ALL models
-- Update: Single optimizer updates all
-
-Author: Rus (SSL Research Project)
-Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
-"""
-
 import os
 import sys
 import json
@@ -70,10 +30,6 @@ print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
 
-# ============================================================
-# DUAL LOGGER CLASS
-# ============================================================
-
 class DualLogger:
     """Logger that writes to both stdout and a file."""
     def __init__(self):
@@ -100,10 +56,6 @@ class DualLogger:
             self.log_file = None
 
 
-# ============================================================
-# 0. CONFIGURATION
-# ============================================================
-
 LABELED_FRACTION = 0.01
 
 BATCH_SIZE_TRAIN = 16
@@ -116,20 +68,13 @@ NUM_CLASSES = 2  # Binary classification: benign vs malignant
 IMG_SIZE = 64    # RGB images resized to 64x64
 IN_CHANNELS = 3  # RGB
 
-# Path to the Kaggle dataset root folder
-# Adjust this path to where you extracted the dataset
 DATA_ROOT = os.environ.get("REST_DATA_ROOT", "./data/skin")  # set REST_DATA_ROOT or edit this
 DATA_ROOT = os.path.expanduser(DATA_ROOT)
 
-# Validation split ratio (from training data)
 VAL_SPLIT_RATIO = 0.15  # 15% of train for validation
 
-# Confidence threshold for pseudo-labeling
-CONFIDENCE_THRESHOLD = 0.95
+CONFIDENCE_THRESHOLD = 0.75
 
-# Alpha weight for pseudo-label loss (0-1)
-# Loss = CE(true_labels) + alpha * CE(pseudo_labels)
-# Lower alpha = less trust in pseudo-labels
 PSEUDO_LABEL_ALPHA = 0.5
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -150,7 +95,6 @@ def set_seed(seed):
 # ============================================================
 
 class BasicBlock(nn.Module):
-    """Basic residual block for ResNet."""
     expansion = 1
     
     def __init__(self, in_channels, out_channels, stride=1, downsample=None):
@@ -173,10 +117,6 @@ class BasicBlock(nn.Module):
 
 
 class ResNet18(nn.Module):
-    """
-    ResNet-18 architecture for RGB images.
-    Modified channel configuration [22, 44, 88, 176] for ~1.4M params.
-    """
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
         self.in_planes = 22
@@ -241,15 +181,6 @@ class ResNet18(nn.Module):
         return x
 
 
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR DERMOSCOPY/SKIN CANCER IMAGES
-# ============================================================
-# Based on domain-specific research:
-# - PMC10027281: Medical image augmentation techniques
-# - MDPI Sensors 2021: Med-Aug for optimal DA in medical DL
-# - Key finding: Noise-based augmentations work better than color jitter
-#   for medical images because color is diagnostic
-# ============================================================
 
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
@@ -300,45 +231,22 @@ class RandomSharpness:
 
 
 def get_augmentation_transforms():
-    """
-    Define three distinct augmentation strategies for dermoscopy skin lesion images.
     
-    Key insight from research: For medical images, NOISE-BASED augmentations
-    are more effective than color jitter because color is diagnostic.
-    
-    Transform strategies:
-    1. PURE: Clean anchor view (no augmentation)
-    2. NOISE/ARTIFACT: Gaussian noise, salt-pepper, sharpness (simulates imaging artifacts)
-    3. GEOMETRIC: Rotation, flip, crop, affine (simulates different capture angles)
-    """
-    
-    # ImageNet-style normalization for RGB
     normalize = transforms.Normalize(
         mean=[0.485, 0.456, 0.406],
         std=[0.229, 0.224, 0.225]
     )
     
-    # =========================================================
-    # Transform 1: PURE (No Augmentation)
-    # Just resize and normalize - the clean "anchor" view
-    # =========================================================
+
     transform_pure = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
     
-    # =========================================================
-    # Transform 2: NOISE/ARTIFACT Augmentation
-    # Simulates real imaging variations WITHOUT destroying color:
-    # - Gaussian noise (sensor noise, low light)
-    # - Salt-pepper noise (dead pixels, transmission errors)
-    # - Sharpness variation (focus differences)
-    # - Mild blur (gel bubbles, slight defocus)
-    # =========================================================
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        # Basic geometric (lesions can appear at any orientation)
+
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),
         transforms.ToTensor(),
@@ -352,15 +260,8 @@ def get_augmentation_transforms():
         ], p=0.3),
         normalize
     ])
+
     
-    # =========================================================
-    # Transform 3: GEOMETRIC/SPATIAL
-    # Simulates different capture conditions:
-    # - Camera angle variations
-    # - Different zoom levels
-    # - Lesion positioning in frame
-    # - Full rotation (lesions have no preferred orientation)
-    # =========================================================
     transform_geometric = transforms.Compose([
         # Slight oversize for random crop (simulates different framing)
         transforms.Resize((IMG_SIZE + 12, IMG_SIZE + 12)),
@@ -400,23 +301,11 @@ def get_eval_transform():
     ])
 
 
-# ============================================================
-# 3. CUSTOM DATASET CLASSES FOR SKIN CANCER
-# ============================================================
 
 class SkinCancerDataset(Dataset):
-    """
-    Custom dataset for Skin Cancer images that mimics MedMNIST's interface.
-    Stores all image paths and labels for consistent indexing.
-    """
-    
+
     def __init__(self, root_dir, split='train', transform=None):
-        """
-        Args:
-            root_dir: Path to dataset root (contains train/ and test/ folders)
-            split: 'train' or 'test'
-            transform: Optional transform to apply
-        """
+
         self.root_dir = Path(root_dir)
         self.split = split
         self.transform = transform
@@ -447,11 +336,6 @@ class SkinCancerDataset(Dataset):
     
     @property
     def imgs(self):
-        """
-        Lazy-load all images into memory for MedMNIST-style access.
-        Images are stored as a list of numpy arrays (not a single array)
-        to handle varying image sizes.
-        """
         if self._imgs_cache is None:
             print(f"  Loading {len(self.image_paths)} images into memory...")
             self._imgs_cache = []
@@ -478,7 +362,6 @@ class SkinCancerDataset(Dataset):
 
 
 class MultiAugmentationDataset(Dataset):
-    """Dataset wrapper that returns multiple augmented views of each image."""
     
     def __init__(self, base_dataset, transforms_dict):
         self.base_dataset = base_dataset
@@ -501,7 +384,6 @@ class MultiAugmentationDataset(Dataset):
 
 
 class MultiAugmentationSubset(Dataset):
-    """Subset wrapper for MultiAugmentationDataset. Returns is_pseudo=0 (true labels)."""
     
     def __init__(self, multi_aug_dataset, indices):
         self.dataset = multi_aug_dataset
@@ -517,7 +399,6 @@ class MultiAugmentationSubset(Dataset):
 
 
 class PseudoLabelMultiAugDataset(Dataset):
-    """Dataset that applies multiple augmentations with pseudo-labels. Returns is_pseudo=1."""
     
     def __init__(self, base_dataset, indices, pseudo_labels, transforms_dict):
         self.base_dataset = base_dataset
@@ -566,14 +447,8 @@ class EvalSubset(Dataset):
         return img, label
 
 
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
 
 class JointAugmentationEnsemble(nn.Module):
-    """
-    Joint Ensemble with SAME architecture but DIFFERENT augmentation views.
-    """
     
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
@@ -662,9 +537,6 @@ def build_joint_ensemble():
     return ensemble
 
 
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
 
 def compute_class_weights(dataset_raw, indices):
     """
@@ -789,21 +661,10 @@ def prepare_data(seed, num_batches):
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
 
 def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
                          class_weights, verbose=True, pseudo_label_alpha=1.0):
-    """
-    Train the joint augmentation ensemble with class-weighted loss.
-    
-    Loss function:
-    - For true labels: CE(y_true, y_pred) with weight 1.0
-    - For pseudo-labels: CE(y_pseudo, y_pred) with weight pseudo_label_alpha
-    
-    This allows down-weighting pseudo-labels which are less reliable.
-    """
+
     criterion = nn.CrossEntropyLoss(weight=class_weights, reduction='none')
     
     optimizer = optim.AdamW(ensemble.parameters(), lr=lr, weight_decay=WEIGHT_DECAY)
@@ -842,11 +703,7 @@ def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
             per_sample_loss = criterion(ensemble_logits, labels)
             
             if is_pseudo is not None and pseudo_label_alpha < 1.0:
-                # Apply alpha weighting: true labels get weight 1.0, pseudo-labels get weight alpha
-                # is_pseudo is 0 for true labels, 1 for pseudo-labels
-                # weight = 1.0 * (1 - is_pseudo) + alpha * is_pseudo
-                #        = 1.0 - is_pseudo + alpha * is_pseudo
-                #        = 1.0 - is_pseudo * (1 - alpha)
+
                 sample_weights = 1.0 - is_pseudo * (1.0 - pseudo_label_alpha)
                 loss = (per_sample_loss * sample_weights).mean()
             else:
@@ -941,9 +798,6 @@ def evaluate_joint_ensemble(ensemble, loader):
     return results
 
 
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
 
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
     """Extract concatenated penultimate features from all 3 models."""
@@ -979,7 +833,6 @@ def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
 
 
 def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, batch_size):
-    """TypiClust selection: k-means clustering, select nearest to centroid."""
     print(f"    [TypiClust] Extracting features for {len(unlabeled_indices)} unlabeled samples...")
     features = extract_ensemble_features(ensemble, dataset_raw, unlabeled_indices, eval_transform)
     
@@ -1016,9 +869,6 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     return selected_global, remaining_global
 
 
-# ============================================================
-# 8. ENSEMBLE CONFIDENCE PSEUDO-LABELING
-# ============================================================
 
 def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, true_labels,
                                         eval_transform, confidence_threshold=0.75):
@@ -1099,12 +949,8 @@ def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, tr
     return accepted_indices, accepted_labels, stats
 
 
-# ============================================================
-# 9. UPPER BOUND EXPERIMENT (100% Labeled)
-# ============================================================
 
 def run_upper_bound_experiment(data_dict):
-    """Train joint ensemble with 100% labeled data to establish upper bound."""
     print("\n" + "="*70)
     print("UPPER BOUND EXPERIMENT: 100% LABELED DATA (AUGMENTATION ENSEMBLE)")
     print("="*70)
@@ -1154,9 +1000,6 @@ def run_upper_bound_experiment(data_dict):
     return upper_bound_metrics
 
 
-# ============================================================
-# 10. FULL-BATCH SELF-TRAINING BASELINE
-# ============================================================
 
 def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full_Batch_ST"):
     """Full-Batch Self-Training (F-ST) baseline with augmentation ensemble."""
@@ -1267,15 +1110,8 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
     }
 
 
-# ============================================================
-# 11. AUGMENTATION ENSEMBLE SRPM-ST WITH TYPICLUST
-# ============================================================
 
 def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name="Aug_Ensemble_SRPM_ST"):
-    """
-    SRPM-ST with Augmentation-Based Joint Ensemble + TypiClust.
-    RETRAINING FROM SCRATCH per SRPM-ST Algorithm 1.
-    """
     
     print("\n" + "="*70)
     print(f"EXPERIMENT: {experiment_name}")
@@ -1454,10 +1290,6 @@ def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name=
     }, ensemble
 
 
-# ============================================================
-# 12. REPORTING AND SAVING
-# ============================================================
-
 def print_final_results(results, upper_bound_metrics=None):
     """Print final results."""
     print("\n" + "="*100)
@@ -1575,10 +1407,6 @@ def save_results(results, upper_bound_metrics, fst_results, output_dir, seed):
     
     print(f"Summary saved to: {summary_path}")
 
-
-# ============================================================
-# 13. MAIN EXECUTION
-# ============================================================
 
 def run_single_seed(seed, num_batches, base_output_dir):
     """Run experiment for a single seed."""
