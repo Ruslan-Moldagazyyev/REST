@@ -122,37 +122,6 @@ These are fixed across the main experiments (full details in
 - Backbone: modified ResNet-18 with channels `[22, 44, 88, 176]` (~1.32–1.4M params per model)
 - Evaluation metric: Area Under the ROC Curve (AUC), mean ± std over 3 seeds
 
----
-<!-- 
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@article{moldagazyyev_rest,
-  title   = {REST: Representative-batch Ensemble Self-Training Framework for
-             Semi-Supervised Medical Image Classification},
-  author  = {Moldagazyyev, Ruslan and Jamwal, Prashant K. and Mukhamediya, Azamat},
-  journal = {TBD},
-  year    = {2026}
-}
-```
-
-This work builds on SRPM-ST:
-
-```bibtex
-@article{mukhamediya2024srpmst,
-  title   = {SRPM-ST: Sequential retraining and pseudo-labeling in mini-batches
-             for self-training},
-  author  = {Mukhamediya, Azamat and Zollanvari, Amin},
-  journal = {Neurocomputing},
-  year    = {2024}
-}
-```
-
----
--->
 
 ## License
 
