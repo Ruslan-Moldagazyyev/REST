@@ -123,6 +123,7 @@ These are fixed across the main experiments (full details in
 - Evaluation metric: Area Under the ROC Curve (AUC), mean ± std over 3 seeds
 
 ---
+<!-- 
 
 ## Citation
 
@@ -151,6 +152,7 @@ This work builds on SRPM-ST:
 ```
 
 ---
+-->
 
 ## License
 
