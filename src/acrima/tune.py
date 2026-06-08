@@ -99,10 +99,6 @@ class BasicBlock(nn.Module):
 
 
 class ResNet18(nn.Module):
-    """
-    ResNet-18 architecture for RGB images.
-    Modified channel configuration [22, 44, 88, 176] for ~1.4M params (RGB input).
-    """
     def __init__(self, num_classes=2, in_channels=3):
         super().__init__()
         self.in_planes = 22
@@ -278,7 +274,6 @@ class ACRIMADataset(Dataset):
         self.labels = []
         
         # Class mapping: Non Glaucoma=0, Glaucoma=1
-        # Handle various possible folder names
         class_mappings = {
             'non glaucoma': 0, 'nonglaucoma': 0, 'normal': 0, 'non_glaucoma': 0,
             'glaucoma': 1
@@ -291,10 +286,8 @@ class ACRIMADataset(Dataset):
             if not class_dir.is_dir():
                 continue
             
-            # Normalize folder name for mapping
             folder_name = class_dir.name.lower().strip()
             
-            # Find matching class
             class_idx = None
             for pattern, idx in class_mappings.items():
                 if pattern in folder_name:
@@ -313,10 +306,8 @@ class ACRIMADataset(Dataset):
         
         self.labels = np.array(self.labels)
         
-        # For compatibility with MedMNIST-style access
         self._imgs_cache = None
         
-        # Print dataset statistics
         if len(self.labels) > 0:
             glaucoma_count = np.sum(self.labels == 1)
             normal_count = np.sum(self.labels == 0)
@@ -355,10 +346,6 @@ class ACRIMADataset(Dataset):
 
 
 class MultiAugmentationDataset(Dataset):
-    """
-    Dataset wrapper that returns multiple augmented views of each image.
-    Works with ACRIMADataset.
-    """
     
     def __init__(self, base_dataset, transforms_dict):
         self.base_dataset = base_dataset
@@ -381,7 +368,6 @@ class MultiAugmentationDataset(Dataset):
 
 
 class MultiAugmentationSubset(Dataset):
-    """Subset wrapper for MultiAugmentationDataset. Returns is_pseudo=0 (true labels)."""
     
     def __init__(self, multi_aug_dataset, indices):
         self.dataset = multi_aug_dataset
@@ -396,7 +382,6 @@ class MultiAugmentationSubset(Dataset):
         return img_min, img_color, img_geo, label, 0
 
 class PseudoLabelMultiAugDataset(Dataset):
-    """Dataset that applies multiple augmentations with pseudo-labels."""
     
     def __init__(self, base_dataset, indices, pseudo_labels, transforms_dict):
         self.base_dataset = base_dataset
