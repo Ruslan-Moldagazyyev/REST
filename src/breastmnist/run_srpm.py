@@ -1,30 +1,3 @@
-"""
-Augmentation-Based Joint Ensemble SRPM-ST - Multi-Seed Runner
-==============================================================
-BreastMNIST (Binary, 2 classes) with TRUE Joint Ensemble Training
-
-FIXES APPLIED:
-1. CLASS-WEIGHTED LOSS: Inverse frequency weighting to handle 1:4 class imbalance
-2. MODEL 1 = PURE (No Augmentation): No random flips or transforms, just resize+normalize
-3. TYPICLUST: Feature-based mini-batch selection using k-means on penultimate layer features
-
-Architecture: 3x identical ResNet18 [22, 44, 88, 176] (~1.32M params each)
-Diversity Source: Different augmentation strategies
-  - Model 1: Pure (no augmentation at all)
-  - Model 2: Intensity (brightness, contrast, blur - ultrasound relevant)
-  - Model 3: Geometric (rotation, translation, scale, shear, flips)
-
-Training Flow:
-- Forward: Each model gets its augmented view → Average logits → Loss (class-weighted)
-- Backward: Gradients flow to ALL models
-- Update: Single optimizer updates all
-
-Runs different seeds with different NUM_BATCHES (from tuning results).
-
-Author: Rus (SSL Research Project)
-Based on SRPM-ST (Mukhamediya & Zollanvari, 2024)
-"""
-
 import os
 import sys
 import json
@@ -58,9 +31,6 @@ torch.cuda.set_device(device)
 print("Using device:", device)
 print("GPU name:", torch.cuda.get_device_name(device))
 
-# ============================================================
-# DUAL LOGGER CLASS
-# ============================================================
 
 class DualLogger:
     """Logger that writes to both stdout and a file."""
@@ -88,10 +58,6 @@ class DualLogger:
             self.log_file = None
 
 
-# ============================================================
-# 0. CONFIGURATION
-# ============================================================
-
 LABELED_FRACTION = 0.10
 
 BATCH_SIZE_TRAIN = 16
@@ -103,8 +69,8 @@ WEIGHT_DECAY = 1e-1
 NUM_CLASSES = 2  # Binary classification for BreastMNIST
 IMG_SIZE = 28
 
-# Confidence threshold for pseudo-labeling
-CONFIDENCE_THRESHOLD = 0.55
+
+CONFIDENCE_THRESHOLD = 0.75
 
 # Alpha weight for pseudo-label loss (0-1)
 # Loss = CE(true_labels) + alpha * CE(pseudo_labels)
@@ -123,10 +89,6 @@ def set_seed(seed):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-
-# ============================================================
-# 1. RESNET18 ARCHITECTURE (Single architecture for all models)
-# ============================================================
 
 class BasicBlock(nn.Module):
     """Basic residual block for ResNet."""
@@ -220,16 +182,6 @@ class ResNet18(nn.Module):
         return x
 
 
-# ============================================================
-# 2. AUGMENTATION TRANSFORMS FOR BREASTMNIST
-# ============================================================
-# Based on medical imaging research:
-# - PMC10027281: Medical image augmentation techniques
-# - MDPI Sensors 2021: Med-Aug for optimal DA in medical DL
-# - Key finding: Noise-based augmentations work better than 
-#   aggressive intensity changes for medical images
-# ============================================================
-
 class AddGaussianNoise:
     """Add Gaussian noise to tensor."""
     def __init__(self, mean=0.0, std=0.05):
@@ -280,24 +232,13 @@ def get_augmentation_transforms():
     
     normalize = transforms.Normalize(mean=[0.5], std=[0.5])
     
-    # =========================================================
-    # Transform 1: PURE (No Augmentation)
-    # Just resize and normalize - the clean "anchor" view
-    # =========================================================
     transform_pure = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
         normalize
     ])
-    
-    # =========================================================
-    # Transform 2: NOISE/ARTIFACT Augmentation
-    # Simulates real ultrasound imaging variations:
-    # - Speckle noise (characteristic of ultrasound)
-    # - Gaussian noise (sensor noise)
-    # - Mild blur (probe coupling variations)
-    # - Very mild brightness/contrast (gain variations)
-    # =========================================================
+
+  
     transform_noise = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.RandomHorizontalFlip(p=0.5),
@@ -313,11 +254,8 @@ def get_augmentation_transforms():
         ], p=0.3),
         normalize
     ])
-    
-    # =========================================================
-    # Transform 3: GEOMETRIC/SPATIAL
-    # Simulates different probe angles, positions
-    # =========================================================
+
+  
     transform_geometric = transforms.Compose([
         transforms.Resize((IMG_SIZE + 4, IMG_SIZE + 4)),
         transforms.RandomCrop(IMG_SIZE),
@@ -350,9 +288,6 @@ def get_eval_transform():
     ])
 
 
-# ============================================================
-# 3. MULTI-AUGMENTATION DATASET WRAPPERS
-# ============================================================
 
 class MultiAugmentationDataset(Dataset):
     """Dataset wrapper that returns multiple augmented views of each image."""
@@ -420,10 +355,6 @@ class PseudoLabelMultiAugDataset(Dataset):
         # Return is_pseudo = 1 (this is a pseudo-labeled sample)
         return img_minimal, img_color, img_geometric, label, 1
 
-
-# ============================================================
-# 4. JOINT AUGMENTATION ENSEMBLE CLASS
-# ============================================================
 
 class JointAugmentationEnsemble(nn.Module):
     """
@@ -516,10 +447,6 @@ def build_joint_ensemble():
     return ensemble
 
 
-# ============================================================
-# 5. DATA PREPARATION
-# ============================================================
-
 def compute_class_weights(dataset_raw, indices):
     """
     Compute inverse frequency class weights for handling class imbalance.
@@ -602,9 +529,6 @@ def prepare_data(seed, num_batches):
     }
 
 
-# ============================================================
-# 6. TRAINING AND EVALUATION
-# ============================================================
 
 def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
                          class_weights, verbose=True, pseudo_label_alpha=1.0):
@@ -656,11 +580,6 @@ def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
             per_sample_loss = criterion(ensemble_logits, labels)
             
             if is_pseudo is not None and pseudo_label_alpha < 1.0:
-                # Apply alpha weighting: true labels get weight 1.0, pseudo-labels get weight alpha
-                # is_pseudo is 0 for true labels, 1 for pseudo-labels
-                # weight = 1.0 * (1 - is_pseudo) + alpha * is_pseudo
-                #        = 1.0 - is_pseudo + alpha * is_pseudo
-                #        = 1.0 - is_pseudo * (1 - alpha)
                 sample_weights = 1.0 - is_pseudo * (1.0 - pseudo_label_alpha)
                 loss = (per_sample_loss * sample_weights).mean()
             else:
@@ -698,10 +617,6 @@ def train_joint_ensemble(ensemble, train_loader, val_loader, num_epochs, lr,
 
 
 def evaluate_joint_ensemble(ensemble, loader):
-    """
-    Evaluate the joint ensemble on standard (non-augmented) data.
-    During evaluation, all models see the SAME image (no augmentation).
-    """
     ensemble.eval()
     
     all_ensemble_preds = []
@@ -758,10 +673,6 @@ def evaluate_joint_ensemble(ensemble, loader):
     return results
 
 
-# ============================================================
-# 7. TYPICLUST: FEATURE-BASED MINI-BATCH SELECTION
-# ============================================================
-
 def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
     """
     Extract concatenated penultimate features from all 3 models for given indices.
@@ -799,12 +710,6 @@ def extract_ensemble_features(ensemble, dataset_raw, indices, eval_transform):
 
 
 def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, batch_size):
-    """
-    TypiClust selection: Extract features, run k-means with k=batch_size,
-    select the sample nearest each centroid.
-    
-    Returns: selected_global (indices), remaining_global (indices)
-    """
     print(f"    [TypiClust] Extracting features for {len(unlabeled_indices)} unlabeled samples...")
     features = extract_ensemble_features(ensemble, dataset_raw, unlabeled_indices, eval_transform)
     
@@ -840,10 +745,6 @@ def typiclust_select(ensemble, dataset_raw, unlabeled_indices, eval_transform, b
     
     return selected_global, remaining_global
 
-
-# ============================================================
-# 8. ENSEMBLE CONFIDENCE PSEUDO-LABELING
-# ============================================================
 
 def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, true_labels,
                                         eval_transform, confidence_threshold=0.75):
@@ -926,9 +827,6 @@ def ensemble_confidence_pseudo_labeling(ensemble, dataset_raw, batch_indices, tr
     return accepted_indices, accepted_labels, stats
 
 
-# ============================================================
-# 9. UPPER BOUND EXPERIMENT (100% Labeled)
-# ============================================================
 
 def run_upper_bound_experiment(data_dict):
     """Train joint ensemble with 100% labeled data to establish upper bound."""
@@ -976,10 +874,6 @@ def run_upper_bound_experiment(data_dict):
     
     return upper_bound_metrics
 
-
-# ============================================================
-# 10. FULL-BATCH SELF-TRAINING BASELINE
-# ============================================================
 
 def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full_Batch_ST"):
     """Full-Batch Self-Training (F-ST) baseline with augmentation ensemble."""
@@ -1090,18 +984,7 @@ def run_full_batch_st(data_dict, confidence_threshold, experiment_name="Aug_Full
     }
 
 
-# ============================================================
-# 11. AUGMENTATION ENSEMBLE SRPM-ST WITH TYPICLUST (MAIN ALGORITHM)
-# ============================================================
-
 def run_joint_ensemble_srpm_st(data_dict, confidence_threshold, experiment_name="Aug_Ensemble_SRPM_ST"):
-    """
-    SRPM-ST with Augmentation-Based Joint Ensemble + TypiClust.
-    
-    All 3 models (same ResNet18 architecture) are trained together.
-    TypiClust selects representative samples each iteration.
-    RETRAINING FROM SCRATCH per SRPM-ST Algorithm 1.
-    """
     
     print("\n" + "="*70)
     print(f"EXPERIMENT: {experiment_name}")
